@@ -1,0 +1,294 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Mauli Guest House - Design System */
+
+@layer base {
+  :root {
+    --background: 210 25% 97%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 222 47% 11%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 215 20% 65%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 187 92% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 187 92% 35%;
+
+    --radius: 0.5rem;
+
+    /* Sidebar - Slate 900 */
+    --sidebar-background: 222 47% 11%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 187 92% 35%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 17%;
+    --sidebar-ring: 187 92% 35%;
+
+    /* Status Colors */
+    --status-available: 142 76% 36%;
+    --status-occupied: 0 84% 60%;
+    --status-reserved: 217 91% 60%;
+    --status-cleaning: 271 91% 65%;
+    --status-maintenance: 25 95% 53%;
+  }
+
+  .dark {
+    /* STRICT VS Code Dark Mode */
+    --background: 0 0% 12%; /* #1e1e1e */
+    --foreground: 0 0% 83%; /* #d4d4d4 */
+
+    --card: 240 1% 15%; /* #252526 */
+    --card-foreground: 0 0% 83%; /* #d4d4d4 */
+
+    --popover: 240 1% 15%; /* #252526 */
+    --popover-foreground: 0 0% 83%; /* #d4d4d4 */
+
+    --primary: 212 100% 61%; /* #3794ff VS Code Blue Accent */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 200 5% 17%; /* #2a2d2e VS Code Hover */
+    --secondary-foreground: 0 0% 83%; /* #d4d4d4 */
+
+    --muted: 240 1% 20%; 
+    --muted-foreground: 0 0% 65%;
+
+    --accent: 212 100% 61%; /* #3794ff */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 83%;
+
+    --border: 200 5% 17%; /* #2a2d2e */
+    --input: 200 5% 17%;
+    --ring: 212 100% 61%;
+
+    /* Sidebar - VS Code #181818 */
+    --sidebar-background: 0 0% 9%; /* #181818 */
+    --sidebar-foreground: 0 0% 83%; /* #d4d4d4 */
+    --sidebar-primary: 212 100% 61%; /* #3794ff */
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 200 5% 17%; /* #2a2d2e */
+    --sidebar-accent-foreground: 0 0% 83%; /* #d4d4d4 */
+    --sidebar-border: 200 5% 17%; /* #2a2d2e */
+    --sidebar-ring: 212 100% 61%; /* #3794ff */
+
+    /* Status Colors */
+    --status-available: 142 76% 36%;
+    --status-occupied: 0 84% 60%;
+    --status-reserved: 217 91% 60%;
+    --status-cleaning: 271 91% 65%;
+    --status-maintenance: 25 95% 53%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html, body, #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-secondary;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted-foreground rounded;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-foreground;
+  }
+
+  /* Enhanced Input Visibility */
+  input, select, textarea {
+    @apply bg-background dark:bg-card border-border/50 text-foreground transition-colors;
+  }
+  input:focus, select:focus, textarea:focus {
+    @apply bg-background dark:bg-secondary border-accent ring-2 ring-accent/30 outline-none;
+  }
+
+  /* Fix Webkit Native Datetime-Local Picker Input UI Glitches */
+  input[type="datetime-local"] {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  input[type="datetime-local"]::-webkit-datetime-edit {
+    display: inline-flex;
+    flex: 1;
+    align-items: center;
+    padding: 0;
+  }
+  input[type="datetime-local"]::-webkit-datetime-edit-fields-wrapper {
+    display: flex;
+    align-items: center;
+    letter-spacing: normal;
+  }
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    padding: 4px;
+    margin-left: 8px;
+    display: block;
+  }
+}
+
+@layer components {
+  /* Navigation item */
+  .nav-item {
+    @apply w-full flex items-center px-4 py-3 rounded-lg transition-all duration-200;
+  }
+  .nav-item:hover {
+    @apply bg-sidebar-accent;
+  }
+  .nav-item.active {
+    @apply bg-accent text-accent-foreground;
+  }
+
+  /* Status badges */
+  .status-available {
+    @apply bg-[hsl(var(--status-available))];
+  }
+  .status-occupied {
+    @apply bg-[hsl(var(--status-occupied))];
+  }
+  .status-reserved {
+    @apply bg-[hsl(var(--status-reserved))];
+  }
+  .status-cleaning {
+    @apply bg-[hsl(var(--status-cleaning))];
+  }
+  .status-maintenance {
+    @apply bg-[hsl(var(--status-maintenance))];
+  }
+
+  /* Card variants */
+  .stat-card {
+    @apply bg-card p-4 rounded-xl shadow-sm border border-border cursor-pointer transition-all duration-200;
+  }
+  .stat-card:hover {
+    @apply shadow-md border-accent/50;
+  }
+
+  /* Room card */
+  .room-card {
+    @apply p-3 rounded-lg border flex flex-col items-center text-center relative transition-all duration-200;
+  }
+  .room-card:hover {
+    @apply shadow-md;
+  }
+  .room-card-available {
+    @apply bg-card border-border;
+  }
+  .room-card-occupied {
+    @apply bg-[hsl(var(--status-occupied)/0.1)] border-[hsl(var(--status-occupied)/0.3)];
+  }
+  .room-card-reserved {
+    @apply bg-[hsl(var(--status-reserved)/0.1)] border-[hsl(var(--status-reserved)/0.3)];
+  }
+  .room-card-cleaning {
+    @apply bg-[hsl(var(--status-cleaning)/0.1)] border-[hsl(var(--status-cleaning)/0.3)] cursor-pointer;
+  }
+  .room-card-maintenance {
+    @apply bg-[hsl(var(--status-maintenance)/0.1)] border-[hsl(var(--status-maintenance)/0.3)];
+  }
+
+  /* Calendar */
+  .calendar-day {
+    @apply min-h-[100px] bg-card border-r border-b border-border p-1 overflow-hidden transition-colors duration-150;
+  }
+  .calendar-day:hover {
+    @apply bg-secondary/50;
+  }
+  .calendar-booking {
+    @apply text-xs px-1 py-0.5 mb-0.5 rounded text-white cursor-pointer truncate transition-opacity duration-150;
+  }
+  .calendar-booking:hover {
+    @apply opacity-80;
+  }
+  .calendar-booking-occupied {
+    @apply bg-[hsl(var(--status-occupied))];
+  }
+  .calendar-booking-reserved {
+    @apply bg-[hsl(var(--status-reserved))];
+  }
+}
+
+@layer utilities {
+  /* Animations */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+  .animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+/* Print Styles */
+@media print {
+  body * { visibility: hidden; }
+  #printable-area, #printable-area * { visibility: visible; color: black !important; }
+  #printable-area {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 210mm;
+    height: 297mm;
+    padding: 0;
+    margin: 0;
+    background: white;
+    font-family: sans-serif;
+  }
+  .no-print { display: none !important; }
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+}

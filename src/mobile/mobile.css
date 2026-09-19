@@ -1,0 +1,164 @@
+/* Mobile-specific styles for HOTEL MAULI GUEST HOUSE Android companion app */
+/* Minimal, professional, dense, reception-friendly. NOT SaaS, NOT neon. */
+
+/* Safe area insets for Android gesture navigation */
+.safe-area-pt {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Mobile header */
+.mobile-header {
+  @apply sticky top-0 z-40 bg-card border-b border-border px-3 py-2;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+}
+
+/* Bottom navigation */
+.mobile-bottom-nav {
+  @apply fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border;
+  padding-bottom: env(safe-area-inset-bottom, 8px);
+}
+
+/* Status dot */
+.status-dot {
+  @apply w-2.5 h-2.5 rounded-full flex-shrink-0;
+}
+.status-dot-available { @apply bg-status-available; }
+.status-dot-occupied { @apply bg-status-occupied; }
+.status-dot-reserved { @apply bg-status-reserved; }
+.status-dot-cleaning { @apply bg-status-cleaning; }
+.status-dot-maintenance { @apply bg-status-maintenance; }
+
+/* Room card mobile */
+.m-room-card {
+  @apply bg-card border border-border rounded-lg p-3 transition-all duration-150 active:scale-[0.98] relative;
+  min-height: 88px;
+}
+.m-room-card-available {
+  @apply border-l-[3px] border-l-status-available;
+}
+.m-room-card-occupied {
+  @apply border-l-[3px] border-l-status-occupied bg-[hsl(var(--status-occupied)/0.04)];
+}
+.m-room-card-reserved {
+  @apply border-l-[3px] border-l-status-reserved bg-[hsl(var(--status-reserved)/0.04)];
+}
+.m-room-card-cleaning {
+  @apply border-l-[3px] border-l-status-cleaning bg-[hsl(var(--status-cleaning)/0.04)];
+}
+.m-room-card-maintenance {
+  @apply border-l-[3px] border-l-status-maintenance bg-[hsl(var(--status-maintenance)/0.04)];
+}
+
+/* Bottom sheet overlay */
+.bottom-sheet-overlay {
+  @apply fixed inset-0 z-50 bg-black/40;
+  animation: fadeInOverlay 0.2s ease-out;
+}
+.bottom-sheet-content {
+  @apply fixed bottom-0 left-0 right-0 z-50 bg-card rounded-t-2xl border-t border-border;
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+  animation: slideUpSheet 0.25s ease-out;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.bottom-sheet-handle {
+  @apply w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto mt-3 mb-2;
+}
+
+@keyframes fadeInOverlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slideUpSheet {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* Status count chips on dashboard */
+.status-count-chip {
+  @apply flex flex-col items-center justify-center rounded-lg px-2 py-2 min-w-[56px];
+}
+
+/* Filter pill */
+.filter-pill {
+  @apply px-3 py-1.5 rounded-full text-xs font-semibold border transition-all duration-150 whitespace-nowrap;
+}
+.filter-pill-active {
+  @apply bg-primary text-primary-foreground border-primary;
+}
+.filter-pill-inactive {
+  @apply bg-card text-muted-foreground border-border;
+}
+
+/* Sync indicator */
+.sync-indicator {
+  @apply flex items-center gap-1.5 text-xs font-medium;
+}
+.sync-dot {
+  @apply w-2 h-2 rounded-full;
+}
+.sync-dot-synced { @apply bg-green-500; }
+.sync-dot-syncing { @apply bg-yellow-500 animate-pulse; }
+.sync-dot-offline { @apply bg-gray-400; }
+.sync-dot-failed { @apply bg-red-500; }
+.sync-dot-reconnecting { @apply bg-yellow-500 animate-pulse; }
+
+/* Pull to refresh indicator */
+.ptr-indicator {
+  @apply flex items-center justify-center py-3 text-xs text-muted-foreground;
+}
+
+/* Mobile form styles */
+.m-input {
+  @apply w-full px-4 py-2.5 rounded-lg bg-background border border-border text-foreground text-sm shadow-sm;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all;
+  min-height: 48px;
+}
+.m-input-compact {
+  min-height: 44px;
+  @apply px-3 py-2;
+}
+.m-label {
+  @apply text-sm font-medium text-foreground mb-2 block;
+}
+.m-input-error {
+  @apply border-destructive focus:ring-destructive/30;
+}
+.m-error-text {
+  @apply text-xs text-destructive mt-1.5;
+}
+
+/* Section header */
+.m-section-header {
+  @apply text-xs font-bold text-muted-foreground uppercase tracking-widest px-1 py-2;
+}
+
+/* Empty state */
+.m-empty-state {
+  @apply flex flex-col items-center justify-center py-12 text-center;
+}
+
+/* Category group */
+.m-category-group {
+  @apply mb-4;
+}
+.m-category-header {
+  @apply text-[11px] font-bold text-muted-foreground uppercase tracking-[0.15em] px-1 py-1.5 sticky top-0 bg-background z-10;
+}
+
+/* Touch target minimum */
+.m-touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* More menu item */
+.more-menu-item {
+  @apply flex items-center gap-3 px-4 py-3 text-sm font-medium text-foreground active:bg-secondary transition-colors;
+}
+.more-menu-item + .more-menu-item {
+  @apply border-t border-border/50;
+}

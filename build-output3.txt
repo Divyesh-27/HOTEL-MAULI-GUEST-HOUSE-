@@ -1,0 +1,81 @@
+﻿
+> lodge-manager@0.0.0 electron:build
+> vite build && electron-builder
+
+[36mvite v5.4.19 [32mbuilding for production...[36m[39m
+transforming...
+node.exe : Browserslist: 
+browsers data 
+(caniuse-lite) is 10 
+months old. Please run:
+At line:1 char:1
++ & "C:\Program 
+Files\nodejs/node.exe" 
+"C:\Program 
+Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (B  
+  rowserslist: b...ld.    
+ Please run::String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  npx update-browserslist-
+db@latest
+  Why you should do it 
+regularly: https://github.
+com/browserslist/update-db
+#readme
+[32mΓ£ô[39m 1798 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                      [39m[1m[2m    1.41 kB[22m[1m[22m[2m Γöé gzip:   0.57 kB[22m
+[2mdist/[22m[32massets/mauli-logo-Dz2fAerz.png  [39m[1m[2m2,373.07 kB[22m[1m[22m
+[2mdist/[22m[35massets/index-rmjiZ5Zc.css       [39m[1m[2m   77.04 kB[22m[1m[22m[2m Γöé gzip:  13.00 kB[22m
+[2mdist/[22m[36massets/index-NUeLy849.js        [39m[1m[33m  649.77 kB[39m[22m[2m Γöé gzip: 188.69 kB[22m
+[33m
+(!) Some chunks are 
+larger than 500 kB after 
+minification. Consider:
+- Using dynamic import() 
+to code-split the 
+application
+- Use build.rollupOptions.
+output.manualChunks to 
+improve chunking: https://
+rollupjs.org/configuration
+-options/#output-manualchu
+nks
+- Adjust chunk size limit 
+for this warning via build
+.chunkSizeWarningLimit.[3
+9m
+[32mΓ£ô built in 3.62s[39m
+  ΓÇó electron-builder  version=26.8.1 os=10.0.26200
+  ΓÇó loaded configuration  file=package.json ("build" field)
+  ΓÇó packageManager not detected by file, falling back to environment detection  resolvedPackageManager=npm detected=C:\Users\divye\Documents\ELECTRON APPS\LODGE MANGER DEKSTOP\lodge-manager-main
+  ΓÇó executing @electron/rebuild  electronVersion=39.2.7 arch=x64 buildFromSource=false workspaceRoot=C:\Users\divye\Documents\ELECTRON APPS\LODGE MANGER DEKSTOP\lodge-manager-main projectDir=./ appDir=./
+  ΓÇó installing native dependencies  arch=x64
+  ΓÇó completed installing native dependencies
+  ΓÇó packaging       platform=win32 arch=x64 electron=39.2.7 appOutDir=release\win-unpacked
+  ΓÇó searching for node modules  pm=npm searchDir=C:\Users\divye\Documents\ELECTRON APPS\LODGE MANGER DEKSTOP\lodge-manager-main
+(node:11764) [DEP0190] 
+DeprecationWarning: 
+Passing args to a child 
+process with shell option 
+true can lead to security 
+vulnerabilities, as the 
+arguments are not 
+escaped, only 
+concatenated.
+(Use `node 
+--trace-deprecation ...` 
+to show where the warning 
+was created)
+  ΓÇó duplicate dependency references  dependencies=["@radix-ui/react-collapsible@1.1.11","@radix-ui/react-primitive@2.1.3","@radix-ui/react-slot@1.2.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@radix-ui/react-slot@1.2.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-dialog@1.1.14","@radix-ui/react-primitive@2.1.3","@radix-ui/react-slot@1.2.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-id@1.1.1","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-collection@1.1.7","@radix-ui/react-dismissable-layer@1.1.10","@radix-ui/react-focus-scope@1.1.7","@radix-ui/react-id@1.1.1","@radix-ui/react-popper@1.2.7","@radix-ui/react-portal@1.1.9","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-roving-focus@1.1.10","@radix-ui/react-slot@1.2.3","@types/react@18.3.23","aria-hidden@1.2.4","react-dom@18.3.1","react-remove-scroll@2.7.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-id@1.1.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-slot@1.2.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","@types/react@18.3.23","@types/react@18.3.23","react-style-singleton@2.2.3","react@18.3.1","@types/react@18.3.23","react@18.3.1","react@18.3.1","@types/react@18.3.23","react@18.3.1","@types/react@18.3.23","react@18.3.1","react@18.3.1","@radix-ui/react-id@1.1.1","@radix-ui/react-menu@2.1.15","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-dismissable-layer@1.1.10","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react@18.3.1","@radix-ui/react-use-size@1.1.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-portal@1.1.9","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-collection@1.1.7","@radix-ui/react-id@1.1.1","@radix-ui/react-menu@2.1.15","@radix-ui/react-primitive@2.1.3","@radix-ui/react-collection@1.1.7","@radix-ui/react-id@1.1.1","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-collection@1.1.7","@radix-ui/react-dismissable-layer@1.1.10","@radix-ui/react-id@1.1.1","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-dismissable-layer@1.1.10","@radix-ui/react-focus-scope@1.1.7","@radix-ui/react-id@1.1.1","@radix-ui/react-popper@1.2.7","@radix-ui/react-portal@1.1.9","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-slot@1.2.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","aria-hidden@1.2.4","react-dom@18.3.1","react-remove-scroll@2.7.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-roving-focus@1.1.10","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-use-size@1.1.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-collection@1.1.7","@radix-ui/react-dismissable-layer@1.1.10","@radix-ui/react-focus-scope@1.1.7","@radix-ui/react-id@1.1.1","@radix-ui/react-popper@1.2.7","@radix-ui/react-portal@1.1.9","@radix-ui/react-primitive@2.1.3","@radix-ui/react-slot@1.2.3","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-visually-hidden@1.2.3","@types/react@18.3.23","aria-hidden@1.2.4","react-dom@18.3.1","react-remove-scroll@2.7.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-collection@1.1.7","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-use-size@1.1.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react@18.3.1","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-use-size@1.1.1","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-id@1.1.1","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-roving-focus@1.1.10","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-collection@1.1.7","@radix-ui/react-dismissable-layer@1.1.10","@radix-ui/react-portal@1.1.9","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-visually-hidden@1.2.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@radix-ui/react-roving-focus@1.1.10","@radix-ui/react-toggle@1.1.9","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-primitive@2.1.3","@radix-ui/react-use-controllable-state@1.2.2","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","@radix-ui/react-dismissable-layer@1.1.10","@radix-ui/react-id@1.1.1","@radix-ui/react-popper@1.2.7","@radix-ui/react-portal@1.1.9","@radix-ui/react-presence@1.1.4","@radix-ui/react-primitive@2.1.3","@radix-ui/react-slot@1.2.3","@radix-ui/react-use-controllable-state@1.2.2","@radix-ui/react-visually-hidden@1.2.3","@types/react@18.3.23","react-dom@18.3.1","react@18.3.1","react@18.3.1","@radix-ui/react-dialog@1.1.14","@radix-ui/react-id@1.1.1","@radix-ui/react-primitive@2.1.3","react-dom@18.3.1","react@18.3.1","react@18.3.1","react-dom@18.3.1","react@18.3.1","react@18.3.1","react-dom@18.3.1","react@18.3.1","react@18.3.1","react@18.3.1","loose-envify@1.4.0","react@18.3.1","react-dom@18.3.1","react@18.3.1","react-dom@18.3.1","react@18.3.1","react@18.3.1","@types/react@18.3.23","loose-envify@1.4.0","react-dom@18.3.1","react@18.3.1","react-dom@18.3.1","react@18.3.1","loose-envify@1.4.0","react-dom@18.3.1","prop-types@15.8.1","react-dom@18.3.1","loose-envify@1.4.0","prop-types@15.8.1","react-dom@18.3.1","react@18.3.1","react@18.3.1","react@18.3.1","d3-array@3.2.4","d3-interpolate@3.0.1","d3-time@3.1.0","d3-time@3.1.0","d3-array@3.2.4","react-dom@18.3.1","react@18.3.1","is-glob@4.0.3","is-glob@4.0.3","is-glob@4.0.3","micromatch@4.0.8","is-glob@4.0.3","braces@3.0.3","postcss@8.5.6","resolve@1.22.8","postcss@8.5.6","postcss@8.5.6","postcss-selector-parser@6.1.2","postcss@8.5.6","strip-ansi@7.1.0","strip-ansi@6.0.1","string-width@5.1.2","strip-ansi@7.1.0","@radix-ui/react-dialog@1.1.14","react-dom@18.3.1","react@18.3.1","@types/react@18.3.23","react@18.3.1","react@18.3.1"]
+  ΓÇó updating asar integrity executable resource  executablePath=release\win-unpacked\Lodge Manager.exe
