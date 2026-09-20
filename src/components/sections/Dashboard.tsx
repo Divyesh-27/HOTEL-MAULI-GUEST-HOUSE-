@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import GuestDetailsModal from '../modals/GuestDetailsModal'; // Import the Modal
 import { Booking } from '@/types';
 import { deleteRoomStatusFromCloud, pushBookingToCloud } from '@/lib/syncActions';
+import { normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 
 import { useShallow } from 'zustand/react/shallow';
 
@@ -77,7 +78,13 @@ const Dashboard = () => {
   };
 
   const getBookingForRoom = (roomNo: string) => {
-    return bookings.find(b => b.roomNos.includes(roomNo));
+    const todayStr = normalizeToDayStr(new Date());
+    return bookings.find(b => {
+      if (!b.roomNos.includes(roomNo)) return false;
+      const bIn = normalizeToDayStr(b.checkIn);
+      const bOut = getCheckoutDayStr(b.checkIn, b.days || 1);
+      return todayStr >= bIn && todayStr < bOut;
+    });
   };
 
   // Handler to open the Edit Modal
