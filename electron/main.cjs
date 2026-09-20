@@ -95,10 +95,10 @@ function setupAutoUpdater() {
   autoUpdater.on('error', (err) => {
     console.error('[Updater] Error:', err?.message || err);
     // For automatic checks, fail silently (just log)
-    // For manual checks, send error to renderer
+    // For manual checks, send safe error to renderer
     if (isManualCheck && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-error', {
-        message: err?.message || 'Update check failed. Please check your internet connection.',
+        message: 'Unable to check for updates. Please try again later.',
       });
     }
     isManualCheck = false;
@@ -112,7 +112,8 @@ function setupAutoUpdater() {
       return { success: true, version: result?.updateInfo?.version };
     } catch (err) {
       isManualCheck = false;
-      return { success: false, error: err?.message || 'Check failed' };
+      console.error('[Updater] Manual check error:', err?.message || err);
+      return { success: false, error: 'Unable to check for updates. Please try again later.' };
     }
   });
 

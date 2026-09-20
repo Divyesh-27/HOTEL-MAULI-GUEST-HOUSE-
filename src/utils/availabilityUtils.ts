@@ -16,15 +16,14 @@ export function normalizeToDayStr(input: Date | string | undefined | null): stri
  */
 export function getCheckoutDayStr(checkInInput: Date | string, days: number = 1): string {
   const dayStr = normalizeToDayStr(checkInInput);
+  if (!dayStr) return '';
   const parts = dayStr.split('-').map(Number);
   if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
     // Month is 0-indexed in Date constructor
     const d = new Date(parts[0], parts[1] - 1, parts[2] + (Number(days) || 1));
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
-  const fallback = new Date();
-  fallback.setDate(fallback.getDate() + (Number(days) || 1));
-  return normalizeToDayStr(fallback);
+  return '';
 }
 
 /**
@@ -38,14 +37,16 @@ export function isDateOverlap(
   existingDaysOrCheckout: number | string
 ): boolean {
   const nIn = normalizeToDayStr(newCheckIn);
-  const nOut = typeof newDaysOrCheckout === 'number'
-    ? getCheckoutDayStr(newCheckIn, newDaysOrCheckout)
+  const nOut = typeof newDaysOrCheckout === 'number' || !isNaN(Number(newDaysOrCheckout))
+    ? getCheckoutDayStr(newCheckIn, Number(newDaysOrCheckout))
     : normalizeToDayStr(newDaysOrCheckout);
 
   const eIn = normalizeToDayStr(existingCheckIn);
-  const eOut = typeof existingDaysOrCheckout === 'number'
-    ? getCheckoutDayStr(existingCheckIn, existingDaysOrCheckout)
+  const eOut = typeof existingDaysOrCheckout === 'number' || !isNaN(Number(existingDaysOrCheckout))
+    ? getCheckoutDayStr(existingCheckIn, Number(existingDaysOrCheckout))
     : normalizeToDayStr(existingDaysOrCheckout);
+
+  if (!nIn || !nOut || !eIn || !eOut) return false;
 
   return nIn < eOut && nOut > eIn;
 }

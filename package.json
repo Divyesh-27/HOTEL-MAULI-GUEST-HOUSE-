@@ -1,7 +1,7 @@
 {
-  "name": "hotel-mauli-guest-house",
+  "name": "lodge-manager-desktop",
   "private": true,
-  "version": "1.4.1",
+  "version": "1.5.0",
   "main": "electron/main.cjs",
   "type": "module",
   "description": "Hotel Mauli Guest House - Management Software",
@@ -15,7 +15,6 @@
     "electron:dev": "concurrently \"vite\" \"wait-on tcp:8080 && electron .\"",
     "electron:build": "rimraf dist release && vite build && electron-builder --win",
     "electron:publish": "rimraf dist release && vite build && electron-builder --win --publish always",
-    "mobile:build": "vite build && npx cap sync android",
     "clean": "rimraf dist release node_modules/.cache node_modules/.vite"
   },
   "build": {
@@ -54,11 +53,6 @@
     }
   },
   "dependencies": {
-    "@capacitor/android": "^8.4.1",
-    "@capacitor/camera": "^8.2.0",
-    "@capacitor/cli": "^8.4.1",
-    "@capacitor/core": "^8.4.1",
-    "@capacitor/preferences": "^8.0.1",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",

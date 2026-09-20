@@ -9,6 +9,7 @@ import ImageCapture from '@/components/ui/ImageCapture';
 import { generateUUID } from '@/lib/uuid';
 import { pushBookingToCloud, uploadBase64ToStorage } from '@/lib/syncActions';
 import { createRoomHold, releaseRoomHold } from '@/lib/supabaseBridge';
+import { toLocalDateTimeString } from '@/utils/dateUtils';
 
 import { useShallow } from 'zustand/react/shallow';
 
@@ -43,7 +44,7 @@ const Registration = () => {
     age: '',
     coming: '',
     going: '',
-    checkIn: '',
+    checkIn: toLocalDateTimeString(new Date()),
     days: 1,
     advance: 0,
     discount: 0,
@@ -111,7 +112,7 @@ const Registration = () => {
         otherPersons: '',
         age: '',
         going: '',
-        checkIn: '',
+        checkIn: prefilledRegistration.checkIn ? toLocalDateTimeString(prefilledRegistration.checkIn) : toLocalDateTimeString(new Date()),
         days: 1,
         advance: 0,
         discount: 0,
@@ -325,7 +326,7 @@ const Registration = () => {
       age: '',
       coming: '',
       going: '',
-      checkIn: '',
+      checkIn: toLocalDateTimeString(new Date()),
       days: 1,
       advance: 0,
       discount: 0,
