@@ -6,22 +6,14 @@ import "./index.css";
 /**
  * Desktop detection — must work in BOTH dev AND packaged Electron builds.
  *
- * WHY NOT `?mode=desktop`:
- *   In a packaged Electron build the entry is loaded via loadFile() which
- *   uses a bare file:// URL with no query string, so
- *   window.location.search is always "". That check always evaluated to
- *   false, causing AppMobile to render every time in the installed app.
- *
  * CORRECT APPROACH:
- *   1. `window.electronAPI` — injected exclusively by preload.cjs via
- *      contextBridge. Present in every Electron window (dev + packaged).
- *      Absent in Capacitor/browser.
- *   2. Fallback `?mode=desktop` URL param — kept for manual browser
- *      testing of the desktop layout without Electron.
+ *   1. Default to Desktop layout in standard browsers (`npm run dev`) and Electron.
+ *   2. Switch to Mobile layout if `window.Capacitor` is present (Android APK) 
+ *      or `?mode=mobile` is explicitly in the URL (for browser testing).
+ *   3. `?mode=desktop` allows forcing desktop if needed.
  */
-const isDesktopMode: boolean =
-  !!(window as any).electronAPI ||
-  window.location.search.includes("mode=desktop");
+const isMobileEnvironment = !!(window as any).Capacitor || window.location.search.includes("mode=mobile");
+const isDesktopMode: boolean = window.location.search.includes("mode=desktop") || !isMobileEnvironment;
 
 createRoot(document.getElementById("root")!).render(
   isDesktopMode ? <App /> : <AppMobile />
