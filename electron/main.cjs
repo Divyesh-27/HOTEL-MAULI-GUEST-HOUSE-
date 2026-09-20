@@ -830,7 +830,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'HOTEL MAULI GUEST HOUSE v1.2.0',
+    title: 'HOTEL MAULI GUEST HOUSE v1.4.0',
     icon: path.join(__dirname, '../build/icon.ico'),
     autoHideMenuBar: true,
     show: false,
