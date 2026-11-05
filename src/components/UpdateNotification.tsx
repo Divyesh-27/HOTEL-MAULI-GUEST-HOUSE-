@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
-import { Download, RefreshCw, X, CheckCircle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Download, RefreshCw, CheckCircle, Clock } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 
 /**
- * Centered modal notification for auto-updates.
- * Mounts at root level (App.tsx) — always visible regardless of active page.
- * 
- * States:
- *   - hidden:      no update activity
- *   - downloading: update detected, downloading in background (shows progress)
- *   - ready:       update downloaded, offers "Restart Now" / "Later"
+ * Centered modal & toast notification for auto-updates.
+ * Mounts at root level (App.tsx) — always active throughout app lifecycle.
+ *
+ * Flow:
+ * 1. Update detected: downloads automatically in background (shows progress).
+ * 2. Update downloaded:
+ *    - If checkout/billing is active: waits until idle (navigated away or closed).
+ *    - If idle or at launch: shows short "Updating, app will restart" notice with 3s countdown,
+ *      then triggers silent install and auto-relaunch.
  */
 
 // Extend window type for electronAPI
@@ -30,14 +32,43 @@ declare global {
   }
 }
 
-type UpdateState = 'hidden' | 'downloading' | 'ready';
+type UpdateUiState = 'hidden' | 'downloading' | 'postponed' | 'restarting';
 
 const UpdateNotification = () => {
-  const [state, setState] = useState<UpdateState>('hidden');
+  const [uiState, setUiState] = useState<UpdateUiState>('hidden');
   const [version, setVersion] = useState<string>('');
   const [progress, setProgress] = useState<number>(0);
-  const [dismissed, setDismissed] = useState(false);
+  const [countdown, setCountdown] = useState<number>(3);
+  const [hasDownloaded, setHasDownloaded] = useState<boolean>(false);
+
   const currentSection = useStore((state) => state.currentSection);
+  const isCheckoutOrBillingActive = currentSection === 'billing' || currentSection === 'registration';
+
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Trigger the restart sequence
+  const startRestartCountdown = () => {
+    setUiState('restarting');
+    setCountdown(3);
+
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+
+    let secondsLeft = 3;
+    countdownTimerRef.current = setInterval(() => {
+      secondsLeft -= 1;
+      setCountdown(secondsLeft);
+
+      if (secondsLeft <= 0) {
+        if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+        window.electronAPI?.installUpdate();
+      }
+    }, 1000);
+  };
+
+  const handleRestartNow = () => {
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    window.electronAPI?.installUpdate();
+  };
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -45,116 +76,127 @@ const UpdateNotification = () => {
 
     api.onUpdateAvailable((info) => {
       setVersion(info.version);
-      setState('downloading');
-      setDismissed(false);
+      setUiState('downloading');
     });
 
     api.onUpdateDownloadProgress((prog) => {
       setProgress(prog.percent);
+      if (uiState !== 'downloading') {
+        setUiState('downloading');
+      }
     });
 
     api.onUpdateDownloaded((info) => {
       setVersion(info.version);
-      setState('ready');
-      setDismissed(false);
+      setHasDownloaded(true);
+
+      // Check whether user is actively in a billing/checkout flow
+      const currentlyBusy = currentSection === 'billing' || currentSection === 'registration';
+      if (currentlyBusy) {
+        setUiState('postponed');
+      } else {
+        startRestartCountdown();
+      }
     });
 
-    // Cleanup listeners on unmount
+    api.onUpdateError(() => {
+      // Keep UI clean, errors are logged to updater.log
+      if (uiState === 'downloading') {
+        setUiState('hidden');
+      }
+    });
+
     return () => {
-      api.removeUpdateListeners?.();
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     };
-  }, []);
+  }, [currentSection]);
 
-  const handleRestart = () => {
-    window.electronAPI?.installUpdate();
-  };
+  // When an update has downloaded and the user was postponed, watch for when they leave billing/registration
+  useEffect(() => {
+    if (hasDownloaded && uiState === 'postponed' && !isCheckoutOrBillingActive) {
+      startRestartCountdown();
+    }
+  }, [currentSection, hasDownloaded, uiState, isCheckoutOrBillingActive]);
 
-  const handleDismiss = () => {
-    setDismissed(true);
-  };
-
-  // Don't render if hidden or dismissed
-  if (state === 'hidden' || dismissed) return null;
-
-  // Only show the modal on dashboard or calendar to prevent blocking active flows (e.g. checkout/registration)
-  if (currentSection !== 'dashboard' && currentSection !== 'calendar') return null;
+  if (uiState === 'hidden') return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" style={{ animationDuration: '300ms' }}>
-      <div className="bg-card border border-border rounded-xl shadow-2xl p-6 w-full max-w-md"
-        style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.3), 0 0 1px rgba(255,255,255,0.1)' }}>
-        
-        {/* Downloading State */}
-        {state === 'downloading' && (
-          <div className="space-y-4">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-                <Download className="w-6 h-6 text-primary animate-pulse" />
-              </div>
-              <div className="flex-1 min-w-0 mt-1">
-                <p className="text-lg font-bold text-foreground">Downloading Update</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Version {version} is downloading…
-                </p>
-              </div>
+    <>
+      {/* 1. Downloading Banner (Bottom Right) */}
+      {uiState === 'downloading' && (
+        <div className="fixed bottom-6 right-6 z-[9999] bg-card border border-border shadow-2xl rounded-xl p-4 w-80 animate-fade-in"
+          style={{ boxShadow: '0 8px 30px rgba(0,0,0,0.35)' }}>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
+              <Download className="w-5 h-5 text-primary animate-pulse" />
             </div>
-            {/* Progress bar */}
-            <div className="w-full bg-secondary rounded-full h-2 overflow-hidden mt-2">
-              <div
-                className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
-                style={{ width: `${Math.min(progress, 100)}%` }}
-              />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-foreground">Downloading Update v{version}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Installing automatically when ready...</p>
             </div>
-            <p className="text-sm text-muted-foreground text-right font-mono">{progress.toFixed(1)}%</p>
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={handleDismiss}
-                className="px-4 py-2 border border-border rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-              >
-                Hide
-              </button>
-            </div>
+            <span className="text-xs font-mono font-bold text-primary">{progress}%</span>
           </div>
-        )}
+          <div className="w-full bg-secondary rounded-full h-2 overflow-hidden mt-3">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${Math.min(progress, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
 
-        {/* Ready State */}
-        {state === 'ready' && (
-          <div className="space-y-5">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
-                <CheckCircle className="w-6 h-6 text-emerald-500" />
-              </div>
-              <div className="flex-1 min-w-0 mt-1">
-                <p className="text-lg font-bold text-foreground">Update Ready to Install</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Version {version} has been downloaded and is ready to be installed.
-                </p>
-              </div>
+      {/* 2. Postponed Notice (Bottom Right) — when billing/checkout is active */}
+      {uiState === 'postponed' && (
+        <div className="fixed bottom-6 right-6 z-[9999] bg-card border border-amber-500/50 shadow-2xl rounded-xl p-4 w-96 animate-fade-in"
+          style={{ boxShadow: '0 8px 30px rgba(0,0,0,0.35)' }}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 text-amber-500" />
             </div>
-            
-            <p className="text-sm text-muted-foreground bg-secondary/50 p-3 rounded-lg border border-border">
-              To apply the new update, the application needs to be restarted. You can restart now or install it later.
-            </p>
-            
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-foreground">Update v{version} Ready</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Checkout/Billing in progress. App will automatically restart to apply the update when you finish.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Restarting Notice Modal — when ready to install and idle */}
+      {uiState === 'restarting' && (
+        <div className="fixed inset-0 z-[9999] bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-card border border-primary/40 rounded-2xl shadow-2xl p-6 w-full max-w-md text-center space-y-5"
+            style={{ boxShadow: '0 12px 40px rgba(0,0,0,0.4), 0 0 1px rgba(255,255,255,0.1)' }}>
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto">
+              <CheckCircle className="w-8 h-8 text-emerald-500 animate-bounce" />
+            </div>
+
+            <div>
+              <h3 className="text-xl font-bold text-foreground">Updating to Version {version}</h3>
+              <p className="text-sm text-muted-foreground mt-2">
+                Update downloaded successfully. The application will restart automatically in{' '}
+                <span className="font-bold text-primary text-base font-mono">{countdown}</span> seconds.
+              </p>
+            </div>
+
+            <div className="p-3 bg-secondary/50 rounded-xl border border-border text-xs text-muted-foreground text-left">
+              💡 All guest data, active bookings, and billing history are preserved safely in your SQLite database.
+            </div>
+
+            <div className="pt-2">
               <button
-                onClick={handleRestart}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-lg font-bold hover:bg-primary/90 transition-all shadow-md"
+                onClick={handleRestartNow}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:bg-primary/90 transition-all shadow-md active:scale-98"
               >
-                <RefreshCw className="w-4 h-4" />
-                Restart Now
-              </button>
-              <button
-                onClick={handleDismiss}
-                className="flex-1 px-4 py-3 border border-border rounded-lg font-bold text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-              >
-                Not Now
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Restart Immediately ({countdown}s)
               </button>
             </div>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </>
   );
 };
 

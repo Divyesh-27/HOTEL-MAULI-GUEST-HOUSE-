@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useStore } from '@/store/useStore';
-import { Calendar, IndianRupee, Banknote, Smartphone } from 'lucide-react';
+import { Calendar, IndianRupee, Banknote, Smartphone, Lock } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
 
@@ -65,6 +66,20 @@ const Revenue = () => {
   const [selectedDate, setSelectedDate] = useState(toLocalDateString(new Date()));
   const [selectedMonth, setSelectedMonth] = useState(toLocalDateString(new Date()).slice(0, 7));
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+
+  const handleAuth = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === '268695') {
+      setIsAuthenticated(true);
+      toast.success('Access Granted');
+    } else {
+      toast.error('Incorrect Password');
+      setPasswordInput('');
+    }
+  };
 
   const revenueData = useMemo(() => {
     let cashTotal = 0;
@@ -131,6 +146,37 @@ const Revenue = () => {
   // Generate year options
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: 10 }, (_, i) => (currentYear - i).toString());
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full min-h-[60vh] animate-fade-in">
+        <div className="bg-card border border-border p-8 rounded-xl shadow-sm w-full max-w-sm text-center">
+          <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-8 h-8 text-primary" />
+          </div>
+          <h2 className="text-xl font-bold mb-2">Protected Area</h2>
+          <p className="text-sm text-muted-foreground mb-6">Please enter the password to view Revenue.</p>
+          <form onSubmit={handleAuth} className="space-y-4">
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              className="w-full px-4 py-2 rounded-md bg-secondary border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="Enter password"
+              required
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="w-full py-2 bg-primary text-primary-foreground font-bold rounded-md hover:bg-primary/90 transition-all"
+            >
+              Unlock
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-in">

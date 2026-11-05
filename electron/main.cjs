@@ -8,16 +8,52 @@ app.setAppUserModelId('com.hotelmauliguesthouse.app');
 const isDev = !app.isPackaged;
 
 // ============================================================
+// PATHS & LOGGING SETUP
+// ============================================================
+const DATA_DIR = path.join(app.getPath('appData'), 'hotel-mauli-guest-house');
+const DB_PATH = path.join(DATA_DIR, 'hotel_mauli.db');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const BILLING_DIR = path.join(DATA_DIR, 'Billing');
+const LOGS_DIR = path.join(DATA_DIR, 'logs');
+const UPDATER_LOG_PATH = path.join(LOGS_DIR, 'updater.log');
+const STORE_KEY = 'mauli-guest-house-storage';
+
+// Ensure all application directories exist
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+if (!fs.existsSync(BILLING_DIR)) fs.mkdirSync(BILLING_DIR, { recursive: true });
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+
+// Setup electron-log for updater & application events
+const log = require('electron-log');
+log.transports.file.resolvePathFn = () => UPDATER_LOG_PATH;
+log.transports.file.level = 'info';
+log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
+log.transports.file.maxSize = 10 * 1024 * 1024; // 10 MB rotate limit
+log.transports.console.level = 'info';
+
+log.info('============================================================');
+log.info(`[App] HOTEL MAULI GUEST HOUSE starting (v${app.getVersion()})`);
+log.info(`[App] Environment: isPackaged=${app.isPackaged}, isDev=${isDev}`);
+log.info(`[App] Data Directory: ${DATA_DIR}`);
+log.info(`[App] Updater Log: ${UPDATER_LOG_PATH}`);
+log.info('============================================================');
+
+// ============================================================
 // AUTO-UPDATER (electron-updater)
 // ============================================================
 let mainWindow = null; // Reference to send IPC events to renderer
 let isManualCheck = false; // Track whether the current check was manual
 let updateCheckInterval = null;
+let isUpdateDownloaded = false;
+let downloadedUpdateInfo = null;
 
 function setupAutoUpdater() {
+  log.info(`[Updater] setupAutoUpdater called. App version: ${app.getVersion()}, isPackaged: ${app.isPackaged}`);
+
   // Only run auto-updater in production (packaged) builds
   if (isDev) {
-    console.log('[Updater] Skipping auto-updater in dev mode.');
+    log.info('[Updater] Running in development mode (unpackaged). Skipping auto-updater.');
     return;
   }
 
@@ -25,33 +61,26 @@ function setupAutoUpdater() {
   try {
     autoUpdater = require('electron-updater').autoUpdater;
   } catch (err) {
-    console.error('[Updater] Failed to load electron-updater:', err);
+    log.error('[Updater] Failed to load electron-updater:', err);
     return;
   }
 
   // Configuration
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false; // Controlled quit & install
   autoUpdater.allowDowngrade = false;
-
-  // Logging
-  autoUpdater.logger = {
-    info: (...args) => console.log('[Updater]', ...args),
-    warn: (...args) => console.warn('[Updater]', ...args),
-    error: (...args) => console.error('[Updater]', ...args),
-    debug: (...args) => console.log('[Updater:debug]', ...args),
-  };
+  autoUpdater.logger = log;
 
   // --- Event Handlers ---
   autoUpdater.on('checking-for-update', () => {
-    console.log('[Updater] Checking for update...');
+    log.info('[Updater] Checking for updates on GitHub Releases...');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-checking');
     }
   });
 
   autoUpdater.on('update-available', (info) => {
-    console.log('[Updater] Update available:', info.version);
+    log.info(`[Updater] Update available: v${info.version} (current installed: v${app.getVersion()}). Downloading automatically...`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-available', {
         version: info.version,
@@ -61,7 +90,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-not-available', (info) => {
-    console.log('[Updater] Already on latest version:', info.version);
+    log.info(`[Updater] Update not available. Already on latest version: v${info.version}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-not-available', {
         version: info.version,
@@ -71,7 +100,7 @@ function setupAutoUpdater() {
 
   autoUpdater.on('download-progress', (progress) => {
     const pct = Math.round(progress.percent);
-    console.log(`[Updater] Download progress: ${pct}%`);
+    log.info(`[Updater] Download progress: ${pct}% (${Math.round((progress.bytesPerSecond || 0) / 1024)} KB/s - ${Math.round((progress.transferred || 0) / (1024 * 1024))}MB / ${Math.round((progress.total || 0) / (1024 * 1024))}MB)`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-download-progress', {
         percent: pct,
@@ -83,7 +112,9 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('[Updater] Update downloaded:', info.version);
+    isUpdateDownloaded = true;
+    downloadedUpdateInfo = info;
+    log.info(`[Updater] Update v${info.version} downloaded successfully! Ready to apply.`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded', {
         version: info.version,
@@ -93,9 +124,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('error', (err) => {
-    console.error('[Updater] Error:', err?.message || err);
-    // For automatic checks, fail silently (just log)
-    // For manual checks, send safe error to renderer
+    log.error('[Updater] Error during update process:', err?.stack || err?.message || err);
     if (isManualCheck && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-error', {
         message: 'Unable to check for updates. Please try again later.',
@@ -108,64 +137,68 @@ function setupAutoUpdater() {
   ipcMain.handle('update:check', async () => {
     try {
       isManualCheck = true;
+      log.info('[Updater] Manual update check triggered from user interface.');
       const result = await autoUpdater.checkForUpdates();
       return { success: true, version: result?.updateInfo?.version };
     } catch (err) {
       isManualCheck = false;
-      console.error('[Updater] Manual check error:', err?.message || err);
+      log.error('[Updater] Manual check error:', err?.message || err);
       return { success: false, error: 'Unable to check for updates. Please try again later.' };
     }
   });
 
   ipcMain.handle('update:install', () => {
-    // Save database before quitting for update
-    saveDatabase();
-    if (database) {
-      try {
-        database.close();
-        console.log('[DB] SQLite closed before update install.');
-      } catch (err) {
-        console.error('[DB] Error closing SQLite before update:', err);
-      }
+    log.info('[Updater] update:install invoked. Saving SQLite and applying update with silent restart...');
+    prepareForQuitAndInstall();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
     }
-    // Quit and install — this replaces app code only, not %APPDATA% data
-    autoUpdater.quitAndInstall(false, true);
+    // silent install (true), relaunch after (true)
+    autoUpdater.quitAndInstall(true, true);
   });
 
   // --- Automatic check schedule ---
-  // First check: 10 seconds after launch
+  // On launch: check immediately (500ms after window creation)
   setTimeout(() => {
-    console.log('[Updater] Initial update check...');
+    log.info('[Updater] Initial on-launch update check starting...');
     isManualCheck = false;
     autoUpdater.checkForUpdates().catch((err) => {
-      console.warn('[Updater] Initial check failed (silent):', err?.message);
+      log.warn('[Updater] Initial on-launch check failed (silent):', err?.message);
     });
-  }, 10000);
+  }, 500);
 
   // Periodic check: every 4 hours
   const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
   updateCheckInterval = setInterval(() => {
-    console.log('[Updater] Periodic update check...');
+    log.info('[Updater] Running periodic update check...');
     isManualCheck = false;
     autoUpdater.checkForUpdates().catch((err) => {
-      console.warn('[Updater] Periodic check failed (silent):', err?.message);
+      log.warn('[Updater] Periodic check failed (silent):', err?.message);
     });
   }, FOUR_HOURS_MS);
 }
 
-// ============================================================
-// PATHS
-// ============================================================
-const DATA_DIR = path.join(app.getPath('appData'), 'hotel-mauli-guest-house');
-const DB_PATH = path.join(DATA_DIR, 'hotel_mauli.db');
-const BACKUP_DIR = path.join(DATA_DIR, 'backups');
-const BILLING_DIR = path.join(DATA_DIR, 'Billing');
-const STORE_KEY = 'mauli-guest-house-storage';
-
-// Ensure directories exist
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-if (!fs.existsSync(BILLING_DIR)) fs.mkdirSync(BILLING_DIR, { recursive: true });
+function prepareForQuitAndInstall() {
+  log.info('[DB] prepareForQuitAndInstall: flushing database and closing resources...');
+  if (saveInterval) {
+    clearInterval(saveInterval);
+    saveInterval = null;
+  }
+  if (updateCheckInterval) {
+    clearInterval(updateCheckInterval);
+    updateCheckInterval = null;
+  }
+  saveDatabase();
+  if (database) {
+    try {
+      database.close();
+      database = null;
+      log.info('[DB] SQLite closed cleanly before update install.');
+    } catch (err) {
+      log.error('[DB] Error closing SQLite before update:', err);
+    }
+  }
+}
 
 // ============================================================
 // SQLITE DATABASE (sql.js — WASM-based, no native build)
@@ -831,7 +864,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'HOTEL MAULI GUEST HOUSE v1.4.0',
+    title: `HOTEL MAULI GUEST HOUSE v${app.getVersion()}`,
     icon: path.join(__dirname, '../build/icon.ico'),
     autoHideMenuBar: true,
     show: false,
@@ -890,21 +923,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  // Stop auto-save and update check intervals
-  if (saveInterval) clearInterval(saveInterval);
-  if (updateCheckInterval) clearInterval(updateCheckInterval);
-
-  // Final save to disk
-  saveDatabase();
-
-  // Safely close database before exit
-  if (database) {
-    try {
-      database.close();
-      console.log('[DB] SQLite closed cleanly.');
-    } catch (err) {
-      console.error('[DB] Error closing SQLite:', err);
-    }
-  }
+  log.info('[App] window-all-closed event fired.');
+  prepareForQuitAndInstall();
   if (process.platform !== 'darwin') app.quit();
 });
