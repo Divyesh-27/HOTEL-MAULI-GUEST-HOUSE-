@@ -78,6 +78,7 @@ export interface Booking {
   grand_total_with_gst?: number;
 
   // --- SYNC ENGINE FIELDS ---
+  checkoutDate?: string;
   updated_at?: string;
   version?: number;
   source?: 'desktop' | 'mobile' | string;
@@ -89,6 +90,106 @@ export interface HistoryRecord extends Booking {
   totalPaid: number;
 }
 
+// ============================================================
+// STAFF & PAYROLL MODULE TYPES (Desktop & Sync Ready)
+// ============================================================
+export interface StaffRole {
+  id: string; // UUID
+  name: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface Shift {
+  id: string; // UUID
+  name: string;
+  startTime?: string;
+  endTime?: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface Employee {
+  id: string; // UUID
+  name: string;
+  roleId: string;
+  shiftId: string;
+  monthlySalary: number;
+  joiningDate: string; // YYYY-MM-DD
+  status: 'active' | 'inactive';
+  phone?: string;
+  address?: string;
+  aadhaarLast4?: string; // Only last 4 digits stored in JSON
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface AttendanceRecord {
+  id: string; // UUID
+  employeeId: string;
+  date: string; // YYYY-MM-DD
+  status: 'Present' | 'Absent';
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface SalaryAdvance {
+  id: string; // UUID
+  employeeId: string;
+  amount: number;
+  deducted_amount: number; // Tracker for how much has been deducted
+  date: string; // YYYY-MM-DD
+  reason?: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface BorrowRecord {
+  id: string; // UUID
+  employeeId: string;
+  amount: number;
+  repaid_amount: number; // Tracker for how much has been repaid
+  status: 'outstanding' | 'partially_repaid' | 'settled';
+  date: string; // YYYY-MM-DD
+  reason?: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface SalaryPayment {
+  id: string; // UUID
+  employeeId: string;
+  month: string; // YYYY-MM
+  gross: number; // Monthly gross salary
+  advance_deducted: number;
+  borrow_deducted: number;
+  net_paid: number;
+  paid_on: string; // YYYY-MM-DD
+  payment_ref?: string; // Check / UPI / Cash reference note
+  note?: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface SalaryDeductionLedgerItem {
+  id: string; // UUID
+  salaryPaymentId: string; // References SalaryPayment.id
+  targetType: 'advance' | 'borrow';
+  targetId: string; // References SalaryAdvance.id or BorrowRecord.id
+  amount: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+// Legacy types (for backward compatibility during migration)
 export interface Staff {
   name: string;
   role: string;
@@ -213,4 +314,37 @@ export interface AppUser {
   updated_at?: string;
   version?: number;
   source?: 'desktop' | 'mobile' | string;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      get: (key: string) => Promise<any>;
+      set: (key: string, value: any) => Promise<void>;
+      delete: (key: string) => Promise<void>;
+      createBackup?: () => Promise<{ success: boolean; path?: string; error?: string }>;
+      restoreBackup?: (path: string) => Promise<{ success: boolean; error?: string }>;
+      vaultStatus: () => Promise<{ initialized: boolean; unlocked: boolean; lockedUntil?: number }>;
+      vaultSetup: (password: string) => Promise<{ success: boolean; error?: string }>;
+      vaultUnlock: (password: string) => Promise<{ success: boolean; error?: string; lockedUntil?: number }>;
+      vaultLock: () => Promise<{ success: boolean }>;
+      vaultSave: (recordId: string, data: any) => Promise<{ success: boolean; error?: string }>;
+      vaultGet: (recordId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+      vaultDelete: (recordId: string) => Promise<{ success: boolean; error?: string }>;
+      pdfGenerate?: (filename: string, htmlContent: string) => Promise<boolean>;
+      pdfSaveAs?: (defaultFilename: string, htmlContent: string) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
+      pdfOpen?: (filename: string) => Promise<boolean>;
+      printPreview?: (htmlContent: string) => Promise<boolean>;
+      checkForUpdates?: () => Promise<{ success: boolean; version?: string; error?: string }>;
+      installUpdate?: () => void;
+      onUpdateChecking?: (cb: () => void) => void;
+      onUpdateAvailable?: (cb: (info: { version: string; releaseDate?: string }) => void) => void;
+      onUpdateNotAvailable?: (cb: (info: { version: string }) => void) => void;
+      onUpdateDownloadProgress?: (cb: (progress: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => void) => void;
+      onUpdateDownloaded?: (cb: (info: { version: string; releaseDate?: string }) => void) => void;
+      onUpdateError?: (cb: (err: { message: string }) => void) => void;
+      removeUpdateListeners?: () => void;
+      [key: string]: any;
+    };
+  }
 }

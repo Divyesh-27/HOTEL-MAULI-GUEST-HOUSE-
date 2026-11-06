@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -17,6 +17,10 @@ const BILLING_DIR = path.join(DATA_DIR, 'Billing');
 const LOGS_DIR = path.join(DATA_DIR, 'logs');
 const UPDATER_LOG_PATH = path.join(LOGS_DIR, 'updater.log');
 const STORE_KEY = 'mauli-guest-house-storage';
+
+// Initialize Encrypted Local Vault
+const vault = require('./vault.cjs');
+vault.initVault(DATA_DIR);
 
 // Ensure all application directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -306,6 +310,21 @@ function initSchema() {
 // ============================================================
 // DATABASE BACKUP ENGINE
 // ============================================================
+function createPrelaunchBackup() {
+  if (!fs.existsSync(DB_PATH)) return;
+  try {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const ts = `${now.getFullYear()}_${pad(now.getMonth() + 1)}_${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const backupName = `hotel_mauli_prelaunch_${ts}.db`;
+    const backupPath = path.join(BACKUP_DIR, backupName);
+    fs.copyFileSync(DB_PATH, backupPath);
+    log.info(`[Backup] Pre-launch timestamped backup saved prior to database load: ${backupName}`);
+  } catch (err) {
+    log.error('[Backup] Failed to create pre-launch backup:', err);
+  }
+}
+
 function createBackup(reason = 'scheduled') {
   if (!fs.existsSync(DB_PATH)) return null;
 
@@ -328,6 +347,20 @@ function createBackup(reason = 'scheduled') {
       fs.unlinkSync(backupPath);
       console.error('[Backup] Backup file is empty, removed:', backupPath);
       return null;
+    }
+
+    // Also archive the local encrypted vault directory along with the database backup
+    const vaultDir = vault.getVaultDir();
+    if (fs.existsSync(vaultDir)) {
+      const vaultBackupDir = path.join(BACKUP_DIR, `vault_${ts}`);
+      fs.mkdirSync(vaultBackupDir, { recursive: true });
+      for (const f of fs.readdirSync(vaultDir)) {
+        try {
+          fs.copyFileSync(path.join(vaultDir, f), path.join(vaultBackupDir, f));
+        } catch (copyErr) {
+          console.warn('[Backup] Failed to copy vault file:', f, copyErr);
+        }
+      }
     }
 
     console.log(`[Backup] Created (${reason}): ${backupName} (${(stat.size / 1024).toFixed(1)} KB)`);
@@ -800,6 +833,83 @@ function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('pdf:saveAs', async (_event, defaultFilename, htmlContent) => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        title: 'Save Salary Slip as PDF',
+        defaultPath: defaultFilename || 'Salary_Slip.pdf',
+        filters: [
+          { name: 'PDF Document', extensions: ['pdf'] }
+        ]
+      });
+
+      if (canceled || !filePath) {
+        return { success: false, canceled: true };
+      }
+
+      let pdfWin = new BrowserWindow({
+        width: 1000,
+        height: 1200,
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true
+        }
+      });
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              @page {
+                size: A4 portrait;
+                margin: 12mm 15mm 15mm 15mm;
+              }
+              body {
+                margin: 0;
+                padding: 0;
+                background: white;
+                color: #000;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+              }
+              .pdf-page-container {
+                width: 100%;
+                margin: 0;
+                padding: 0;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="pdf-page-container">
+              ${htmlContent}
+            </div>
+          </body>
+        </html>
+      `;
+
+      await pdfWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+      const pdfBuffer = await pdfWin.webContents.printToPDF({
+        printBackground: true,
+        pageSize: 'A4',
+        margins: { marginType: 'none' }
+      });
+
+      fs.writeFileSync(filePath, pdfBuffer);
+      pdfWin.close();
+
+      return { success: true, filePath };
+    } catch (err) {
+      console.error('[IPC pdf:saveAs] Error:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   let activePrintPreviewWindow = null;
 
   ipcMain.handle('print:preview', (_event, htmlContent) => {
@@ -855,6 +965,15 @@ function registerIpcHandlers() {
     activePrintPreviewWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     return true;
   });
+
+  // --- Local Encrypted Vault (AES-256-GCM) ---
+  ipcMain.handle('vault:status', () => vault.getStatus());
+  ipcMain.handle('vault:setup', (_e, { password }) => vault.setupVault(password));
+  ipcMain.handle('vault:unlock', (_e, { password }) => vault.unlockVault(password));
+  ipcMain.handle('vault:lock', () => vault.lockVault());
+  ipcMain.handle('vault:save', (_e, { recordId, data }) => vault.saveRecord(recordId, data));
+  ipcMain.handle('vault:get', (_e, recordId) => vault.getRecord(recordId));
+  ipcMain.handle('vault:delete', (_e, recordId) => vault.deleteRecord(recordId));
 }
 
 // ============================================================
@@ -895,7 +1014,10 @@ function createWindow() {
 // APP LIFECYCLE
 // ============================================================
 app.whenReady().then(async () => {
-  // 1. Open SQLite database
+  // 1. Create pre-launch timestamped backup before touching SQLite
+  createPrelaunchBackup();
+
+  // 2. Open SQLite database
   const dbOk = await openDatabase();
 
   if (dbOk) {

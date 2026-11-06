@@ -14,24 +14,6 @@ import { useStore } from '@/store/useStore';
  *      then triggers silent install and auto-relaunch.
  */
 
-// Extend window type for electronAPI
-declare global {
-  interface Window {
-    electronAPI?: {
-      checkForUpdates: () => Promise<{ success: boolean; version?: string; error?: string }>;
-      installUpdate: () => void;
-      onUpdateChecking: (cb: () => void) => void;
-      onUpdateAvailable: (cb: (info: { version: string; releaseDate?: string }) => void) => void;
-      onUpdateNotAvailable: (cb: (info: { version: string }) => void) => void;
-      onUpdateDownloadProgress: (cb: (progress: { percent: number; bytesPerSecond: number; transferred: number; total: number }) => void) => void;
-      onUpdateDownloaded: (cb: (info: { version: string; releaseDate?: string }) => void) => void;
-      onUpdateError: (cb: (err: { message: string }) => void) => void;
-      removeUpdateListeners: () => void;
-      [key: string]: any;
-    };
-  }
-}
-
 type UpdateUiState = 'hidden' | 'downloading' | 'postponed' | 'restarting';
 
 const UpdateNotification = () => {

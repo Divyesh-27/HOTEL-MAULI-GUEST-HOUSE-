@@ -24,10 +24,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // --- PDF & Print ---
   pdfGenerate: (filename, htmlContent) => ipcRenderer.invoke('pdf:generate', filename, htmlContent),
+  pdfSaveAs: (defaultFilename, htmlContent) => ipcRenderer.invoke('pdf:saveAs', defaultFilename, htmlContent),
   pdfSave: (filename, base64) => ipcRenderer.invoke('pdf:save', filename, base64),
   pdfExists: (filename) => ipcRenderer.invoke('pdf:exists', filename),
   pdfOpen: (filename) => ipcRenderer.invoke('pdf:open', filename),
   printPreview: (htmlContent) => ipcRenderer.invoke('print:preview', htmlContent),
+
+  // --- Local Encrypted Vault ---
+  vaultStatus: () => ipcRenderer.invoke('vault:status'),
+  vaultSetup: (password) => ipcRenderer.invoke('vault:setup', { password }),
+  vaultUnlock: (password) => ipcRenderer.invoke('vault:unlock', { password }),
+  vaultLock: () => ipcRenderer.invoke('vault:lock'),
+  vaultSave: (recordId, data) => ipcRenderer.invoke('vault:save', { recordId, data }),
+  vaultGet: (recordId) => ipcRenderer.invoke('vault:get', recordId),
+  vaultDelete: (recordId) => ipcRenderer.invoke('vault:delete', recordId),
 
   // --- Auto-Updater ---
   checkForUpdates: () => ipcRenderer.invoke('update:check'),

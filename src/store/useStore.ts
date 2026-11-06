@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
-import { Room, Booking, HistoryRecord, Staff, StaffLog, SectionType, AdvancePayment, InvoiceSettings, DEFAULT_INVOICE_SETTINGS, AppUser, AppRole, DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, RoomHold } from '@/types';
+import { 
+  Room, Booking, HistoryRecord, Staff, StaffLog, SectionType, AdvancePayment, 
+  InvoiceSettings, DEFAULT_INVOICE_SETTINGS, AppUser, AppRole, 
+  DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, RoomHold,
+  StaffRole, Shift, Employee, AttendanceRecord, SalaryAdvance, BorrowRecord, SalaryPayment,
+  SalaryDeductionLedgerItem
+} from '@/types';
+import { generateUUID } from '@/lib/uuid';
 import { getRoomStatusOnDate, normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 import { toLocalDateString } from '@/utils/dateUtils';
 import {
@@ -78,6 +85,21 @@ const defaultRooms: Room[] = [
   { roomNo: '224', category: 'Hall', bedType: '8 Bed Hall (Non-AC)', rent: 3500 },
 ];
 
+export const DEFAULT_STAFF_ROLES: StaffRole[] = [
+  { id: 'role-manager', name: 'Manager', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'role-receptionist', name: 'Receptionist', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'role-housekeeping', name: 'Housekeeping', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'role-cook', name: 'Cook / Chef', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'role-security', name: 'Security', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+];
+
+export const DEFAULT_SHIFTS: Shift[] = [
+  { id: 'shift-morning', name: 'Morning Shift', startTime: '07:00', endTime: '15:00', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'shift-evening', name: 'Evening Shift', startTime: '15:00', endTime: '23:00', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'shift-night', name: 'Night Shift', startTime: '23:00', endTime: '07:00', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+  { id: 'shift-full', name: 'Full Day', startTime: '09:00', endTime: '21:00', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
+];
+
 interface RoomStatus {
   [key: string]: 'cleaning' | 'maintenance';
 }
@@ -146,11 +168,34 @@ interface StoreState {
   setRoomStatus: (roomNo: string, status: 'cleaning' | 'maintenance' | null) => void;
   markCleaned: (roomNo: string) => void;
   
-  // Actions - Staff
+  // Actions - Staff (Legacy)
   addStaff: (staff: Staff) => void;
   removeStaffByName: (name: string) => void;
   removeStaff: (index: number) => void;
   addStaffLog: (log: StaffLog) => void;
+
+  // Staff & Payroll State (Modern Relational Architecture)
+  staffRoles: StaffRole[];
+  shifts: Shift[];
+  employees: Employee[];
+  attendance: AttendanceRecord[];
+  salaryAdvances: SalaryAdvance[];
+  borrows: BorrowRecord[];
+  salaryPayments: SalaryPayment[];
+  salaryDeductionLedger: SalaryDeductionLedgerItem[];
+
+  // Actions - Staff & Payroll (Modern)
+  addStaffRole: (name: string) => StaffRole;
+  addShift: (shift: Omit<Shift, 'id' | 'created_at' | 'updated_at'>) => Shift;
+  addEmployee: (employee: Omit<Employee, 'id' | 'created_at' | 'updated_at'>) => Employee;
+  updateEmployee: (id: string, updates: Partial<Employee>) => void;
+  softDeleteEmployee: (id: string) => void;
+  markAttendance: (employeeId: string, date: string, status: 'Present' | 'Absent') => void;
+  markAllPresent: (date: string) => void;
+  addSalaryAdvance: (advance: { employeeId: string; amount: number; date: string; reason?: string }) => void;
+  addBorrow: (borrow: { employeeId: string; amount: number; date: string; reason?: string }) => void;
+  executePayout: (payout: { employeeId: string; month: string; gross: number; advanceDeducted: number; borrowDeducted: number; netPaid: number; paidOn: string; paymentRef?: string; note?: string }) => { success: boolean; error?: string };
+  voidPayout: (paymentId: string) => { success: boolean; error?: string };
   
   // Actions - Admin
   addRoom: (room: Room) => void;
@@ -213,6 +258,14 @@ export const useStore = create<StoreState>()(
       roomStatus: {},
       staff: [],
       staffLogs: [],
+      staffRoles: DEFAULT_STAFF_ROLES,
+      shifts: DEFAULT_SHIFTS,
+      employees: [],
+      attendance: [],
+      salaryAdvances: [],
+      borrows: [],
+      salaryPayments: [],
+      salaryDeductionLedger: [],
       billCounter: { date: '', count: 0 },
       invoiceSettings: DEFAULT_INVOICE_SETTINGS,
       customBedTypes: ['Single Bed', 'Double Bed', 'Triple Bed', '4 Bed', '5 Bed', '6 Bed'],
@@ -237,7 +290,12 @@ export const useStore = create<StoreState>()(
       }),
       setCurrentUser: (user) => set({ currentUser: user }),
       setDeveloperMode: (status) => set({ isDeveloperMode: status }),
-      logout: () => set({ isAuthenticated: false, currentUser: null, lastLoginTime: null }),
+      logout: () => {
+        if (typeof window !== 'undefined' && (window as any).electronAPI?.vaultLock) {
+          (window as any).electronAPI.vaultLock().catch(console.error);
+        }
+        set({ isAuthenticated: false, currentUser: null, lastLoginTime: null });
+      },
       
       // Navigation
       setSection: (section) => set({ currentSection: section }),
@@ -417,7 +475,7 @@ export const useStore = create<StoreState>()(
       }),
       
       addStaffLog: (log) => set((state) => {
-        const stamped = {
+        const stamped: StaffLog = {
           ...log,
           updated_at: new Date().toISOString(),
           source: 'desktop',
@@ -427,6 +485,361 @@ export const useStore = create<StoreState>()(
         const MAX_STAFF_LOGS = 500; // Retention cap: keep most recent 500 records to prevent unbounded growth
         return { staffLogs: [stamped, ...state.staffLogs].slice(0, MAX_STAFF_LOGS) };
       }),
+
+      // Actions - Staff & Payroll (Modern Relational Architecture)
+      addStaffRole: (name: string) => {
+        const newRole: StaffRole = {
+          id: generateUUID(),
+          name: name.trim(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        set((state) => ({ staffRoles: [...state.staffRoles, newRole] }));
+        return newRole;
+      },
+
+      addShift: (shiftData) => {
+        const newShift: Shift = {
+          ...shiftData,
+          id: generateUUID(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        set((state) => ({ shifts: [...state.shifts, newShift] }));
+        return newShift;
+      },
+
+      addEmployee: (employeeData) => {
+        const newEmployee: Employee = {
+          ...employeeData,
+          id: generateUUID(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        set((state) => ({ employees: [...state.employees, newEmployee] }));
+        return newEmployee;
+      },
+
+      updateEmployee: (id, updates) => set((state) => ({
+        employees: state.employees.map((emp) =>
+          emp.id === id ? { ...emp, ...updates, updated_at: new Date().toISOString() } : emp
+        ),
+      })),
+
+      softDeleteEmployee: (id) => set((state) => ({
+        employees: state.employees.map((emp) =>
+          emp.id === id ? { ...emp, status: 'inactive', deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() } : emp
+        ),
+      })),
+
+      markAttendance: (employeeId, date, status) => set((state) => {
+        const existingIdx = state.attendance.findIndex((a) => a.employeeId === employeeId && a.date === date);
+        const now = new Date().toISOString();
+        if (existingIdx >= 0) {
+          const updated = [...state.attendance];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            status,
+            updated_at: now,
+          };
+          return { attendance: updated };
+        } else {
+          const newRecord: AttendanceRecord = {
+            id: generateUUID(),
+            employeeId,
+            date,
+            status,
+            created_at: now,
+            updated_at: now,
+          };
+          return { attendance: [...state.attendance, newRecord] };
+        }
+      }),
+
+      markAllPresent: (date) => set((state) => {
+        const activeEmployees = state.employees.filter((emp) => emp.status === 'active' && !emp.deleted_at);
+        const now = new Date().toISOString();
+        const updatedAttendance = [...state.attendance];
+
+        for (const emp of activeEmployees) {
+          const idx = updatedAttendance.findIndex((a) => a.employeeId === emp.id && a.date === date);
+          if (idx >= 0) {
+            updatedAttendance[idx] = {
+              ...updatedAttendance[idx],
+              status: 'Present',
+              updated_at: now,
+            };
+          } else {
+            updatedAttendance.push({
+              id: generateUUID(),
+              employeeId: emp.id,
+              date,
+              status: 'Present',
+              created_at: now,
+              updated_at: now,
+            });
+          }
+        }
+        return { attendance: updatedAttendance };
+      }),
+
+      addSalaryAdvance: (advance) => set((state) => {
+        const now = new Date().toISOString();
+        const newAdvance: SalaryAdvance = {
+          id: generateUUID(),
+          employeeId: advance.employeeId,
+          amount: Number(advance.amount),
+          deducted_amount: 0,
+          date: advance.date,
+          reason: advance.reason || undefined,
+          created_at: now,
+          updated_at: now,
+        };
+        return { salaryAdvances: [...state.salaryAdvances, newAdvance] };
+      }),
+
+      addBorrow: (borrow) => set((state) => {
+        const now = new Date().toISOString();
+        const newBorrow: BorrowRecord = {
+          id: generateUUID(),
+          employeeId: borrow.employeeId,
+          amount: Number(borrow.amount),
+          repaid_amount: 0,
+          status: 'outstanding',
+          date: borrow.date,
+          reason: borrow.reason || undefined,
+          created_at: now,
+          updated_at: now,
+        };
+        return { borrows: [...state.borrows, newBorrow] };
+      }),
+
+      executePayout: (payout) => {
+        const state = get();
+        // 1. One payout per employee per month
+        const existing = state.salaryPayments.find(
+          (p) => p.employeeId === payout.employeeId && p.month === payout.month && !p.deleted_at
+        );
+        if (existing) {
+          return { success: false, error: `Salary already paid for ${payout.month} on ${existing.paid_on}` };
+        }
+
+        const now = new Date().toISOString();
+        const paymentId = generateUUID();
+        let remainingAdvanceDeduction = Number(payout.advanceDeducted) || 0;
+        let remainingBorrowDeduction = Number(payout.borrowDeducted) || 0;
+
+        const newLedgerItems: SalaryDeductionLedgerItem[] = [];
+
+        // Update salary advances (FIFO order: oldest created_at first) and record ledger
+        const updatedAdvances = [...state.salaryAdvances]
+          .sort((a, b) => (a.created_at || a.date).localeCompare(b.created_at || b.date))
+          .map((adv) => {
+            if (adv.employeeId === payout.employeeId && remainingAdvanceDeduction > 0) {
+              const outstanding = adv.amount - (adv.deducted_amount || 0);
+              if (outstanding > 0) {
+                const apply = Math.min(outstanding, remainingAdvanceDeduction);
+                remainingAdvanceDeduction -= apply;
+                newLedgerItems.push({
+                  id: generateUUID(),
+                  salaryPaymentId: paymentId,
+                  targetType: 'advance',
+                  targetId: adv.id,
+                  amount: apply,
+                  created_at: now,
+                  updated_at: now,
+                  deleted_at: null,
+                });
+                return {
+                  ...adv,
+                  deducted_amount: (adv.deducted_amount || 0) + apply,
+                  updated_at: now,
+                };
+              }
+            }
+            return adv;
+          });
+
+        // Update borrows (FIFO order: oldest created_at first) and record ledger
+        const updatedBorrows = [...state.borrows]
+          .sort((a, b) => (a.created_at || a.date).localeCompare(b.created_at || b.date))
+          .map((b) => {
+            if (b.employeeId === payout.employeeId && remainingBorrowDeduction > 0) {
+              const outstanding = b.amount - (b.repaid_amount || 0);
+              if (outstanding > 0) {
+                const apply = Math.min(outstanding, remainingBorrowDeduction);
+                remainingBorrowDeduction -= apply;
+                newLedgerItems.push({
+                  id: generateUUID(),
+                  salaryPaymentId: paymentId,
+                  targetType: 'borrow',
+                  targetId: b.id,
+                  amount: apply,
+                  created_at: now,
+                  updated_at: now,
+                  deleted_at: null,
+                });
+                const newRepaid = (b.repaid_amount || 0) + apply;
+                const newStatus: 'outstanding' | 'partially_repaid' | 'settled' =
+                  newRepaid >= b.amount ? 'settled' : (newRepaid > 0 ? 'partially_repaid' : 'outstanding');
+                return {
+                  ...b,
+                  repaid_amount: newRepaid,
+                  status: newStatus,
+                  updated_at: now,
+                };
+              }
+            }
+            return b;
+          });
+
+        const newPayment: SalaryPayment = {
+          id: paymentId,
+          employeeId: payout.employeeId,
+          month: payout.month,
+          gross: Number(payout.gross),
+          advance_deducted: Number(payout.advanceDeducted) || 0,
+          borrow_deducted: Number(payout.borrowDeducted) || 0,
+          net_paid: Number(payout.netPaid),
+          paid_on: payout.paidOn,
+          payment_ref: payout.paymentRef || undefined,
+          note: payout.note || undefined,
+          created_at: now,
+          updated_at: now,
+        };
+
+        set({
+          salaryAdvances: updatedAdvances,
+          borrows: updatedBorrows,
+          salaryPayments: [...state.salaryPayments, newPayment],
+          salaryDeductionLedger: [...(state.salaryDeductionLedger || []), ...newLedgerItems],
+        });
+
+        return { success: true };
+      },
+
+      voidPayout: (paymentId) => {
+        const state = get();
+        const payment = state.salaryPayments.find((p) => p.id === paymentId && !p.deleted_at);
+        if (!payment) {
+          return { success: false, error: 'Payment not found or already voided' };
+        }
+
+        const now = new Date().toISOString();
+        const activeLedger = (state.salaryDeductionLedger || []).filter(
+          (l) => l.salaryPaymentId === paymentId && !l.deleted_at
+        );
+
+        let updatedAdvances = state.salaryAdvances;
+        let updatedBorrows = state.borrows;
+
+        if (activeLedger.length > 0) {
+          // Precise reversal via deduction ledger
+          const advanceDeductMap = new Map<string, number>();
+          const borrowDeductMap = new Map<string, number>();
+
+          for (const item of activeLedger) {
+            if (item.targetType === 'advance') {
+              advanceDeductMap.set(item.targetId, (advanceDeductMap.get(item.targetId) || 0) + item.amount);
+            } else if (item.targetType === 'borrow') {
+              borrowDeductMap.set(item.targetId, (borrowDeductMap.get(item.targetId) || 0) + item.amount);
+            }
+          }
+
+          updatedAdvances = state.salaryAdvances.map((adv) => {
+            const rev = advanceDeductMap.get(adv.id);
+            if (rev && rev > 0) {
+              return {
+                ...adv,
+                deducted_amount: Math.max(0, (adv.deducted_amount || 0) - rev),
+                updated_at: now,
+              };
+            }
+            return adv;
+          });
+
+          updatedBorrows = state.borrows.map((b) => {
+            const rev = borrowDeductMap.get(b.id);
+            if (rev && rev > 0) {
+              const newRepaid = Math.max(0, (b.repaid_amount || 0) - rev);
+              const newStatus: 'outstanding' | 'partially_repaid' | 'settled' =
+                newRepaid >= b.amount ? 'settled' : (newRepaid > 0 ? 'partially_repaid' : 'outstanding');
+              return {
+                ...b,
+                repaid_amount: newRepaid,
+                status: newStatus,
+                updated_at: now,
+              };
+            }
+            return b;
+          });
+        } else {
+          // Legacy fallback restoration for payments made before ledger existed
+          let restoreAdvance = payment.advance_deducted || 0;
+          let restoreBorrow = payment.borrow_deducted || 0;
+
+          const sortedAdvances = [...state.salaryAdvances].sort((a, b) =>
+            (b.created_at || b.date).localeCompare(a.created_at || a.date)
+          );
+          updatedAdvances = sortedAdvances.map((adv) => {
+            if (adv.employeeId === payment.employeeId && restoreAdvance > 0) {
+              const currentDeducted = adv.deducted_amount || 0;
+              if (currentDeducted > 0) {
+                const unapply = Math.min(currentDeducted, restoreAdvance);
+                restoreAdvance -= unapply;
+                return {
+                  ...adv,
+                  deducted_amount: currentDeducted - unapply,
+                  updated_at: now,
+                };
+              }
+            }
+            return adv;
+          });
+
+          const sortedBorrows = [...state.borrows].sort((a, b) =>
+            (b.created_at || b.date).localeCompare(a.created_at || a.date)
+          );
+          updatedBorrows = sortedBorrows.map((b) => {
+            if (b.employeeId === payment.employeeId && restoreBorrow > 0) {
+              const currentRepaid = b.repaid_amount || 0;
+              if (currentRepaid > 0) {
+                const unapply = Math.min(currentRepaid, restoreBorrow);
+                restoreBorrow -= unapply;
+                const newRepaid = currentRepaid - unapply;
+                const newStatus: 'outstanding' | 'partially_repaid' | 'settled' =
+                  newRepaid >= b.amount ? 'settled' : (newRepaid > 0 ? 'partially_repaid' : 'outstanding');
+                return {
+                  ...b,
+                  repaid_amount: newRepaid,
+                  status: newStatus,
+                  updated_at: now,
+                };
+              }
+            }
+            return b;
+          });
+        }
+
+        const updatedPayments = state.salaryPayments.map((p) =>
+          p.id === paymentId ? { ...p, deleted_at: now, updated_at: now } : p
+        );
+
+        const updatedLedger = (state.salaryDeductionLedger || []).map((l) =>
+          l.salaryPaymentId === paymentId && !l.deleted_at
+            ? { ...l, deleted_at: now, updated_at: now }
+            : l
+        );
+
+        set({
+          salaryAdvances: updatedAdvances,
+          borrows: updatedBorrows,
+          salaryPayments: updatedPayments,
+          salaryDeductionLedger: updatedLedger,
+        });
+
+        return { success: true };
+      },
       
       // Admin
       addRoom: (room) => set((state) => {
@@ -793,6 +1206,14 @@ export const useStore = create<StoreState>()(
         roomStatus: state.roomStatus,
         staff: state.staff,
         staffLogs: state.staffLogs,
+        staffRoles: state.staffRoles,
+        shifts: state.shifts,
+        employees: state.employees,
+        attendance: state.attendance,
+        salaryAdvances: state.salaryAdvances,
+        borrows: state.borrows,
+        salaryPayments: state.salaryPayments,
+        salaryDeductionLedger: state.salaryDeductionLedger,
         billCounter: state.billCounter,
         invoiceSettings: state.invoiceSettings,
         customBedTypes: state.customBedTypes,
@@ -806,6 +1227,178 @@ export const useStore = create<StoreState>()(
           if (state.invoiceSettings && (!state.invoiceSettings.ac_to_non_ac_discount_rates || state.invoiceSettings.ac_to_non_ac_discount_rates.length === 0)) {
             state.invoiceSettings.ac_to_non_ac_discount_rates = DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES;
           }
+
+          // Ensure modern staff collections exist
+          if (!state.staffRoles || state.staffRoles.length === 0) {
+            state.staffRoles = DEFAULT_STAFF_ROLES;
+          }
+          if (!state.shifts || state.shifts.length === 0) {
+            state.shifts = DEFAULT_SHIFTS;
+          }
+          if (!state.employees) {
+            state.employees = [];
+          }
+          if (!state.attendance) {
+            state.attendance = [];
+          }
+          if (!state.salaryAdvances) {
+            state.salaryAdvances = [];
+          }
+          if (!state.borrows) {
+            state.borrows = [];
+          }
+          if (!state.salaryPayments) {
+            state.salaryPayments = [];
+          }
+          if (!state.salaryDeductionLedger) {
+            state.salaryDeductionLedger = [];
+          }
+
+          // Auto-migrate legacy staff if any existed
+          if (state.staff && state.staff.length > 0 && state.employees.length === 0) {
+            console.log('[useStore] Migrating legacy staff to modern employees table...', state.staff);
+            state.employees = state.staff.map((s: any, idx: number) => ({
+              id: generateUUID(),
+              name: s.name || `Staff ${idx + 1}`,
+              roleId: state.staffRoles[2]?.id || 'role-housekeeping',
+              shiftId: state.shifts[0]?.id || 'shift-morning',
+              monthlySalary: s.salary || 5000,
+              joiningDate: s.joiningDate || '2026-04-24',
+              status: 'active' as const,
+              phone: s.phone || '',
+              address: s.address || '',
+              aadhaarLast4: s.aadhaar ? String(s.aadhaar).slice(-4) : undefined,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              deleted_at: null
+            }));
+          }
+
+          // Safe normalize step: maps any old snake_case keys from previously saved state
+          // to canonical TypeScript schema. Safe to run multiple times without data loss.
+          if (Array.isArray(state.employees)) {
+            state.employees = state.employees.map((emp: any) => ({
+              id: emp.id || generateUUID(),
+              name: emp.name || '',
+              roleId: emp.roleId || emp.role_id || state.staffRoles?.[0]?.id || 'role-housekeeping',
+              shiftId: emp.shiftId || emp.shift_id || state.shifts?.[0]?.id || 'shift-morning',
+              monthlySalary: Number(emp.monthlySalary ?? emp.monthly_salary ?? emp.salary ?? 5000),
+              joiningDate: emp.joiningDate || emp.joining_date || '2026-04-24',
+              status: (emp.status === 'inactive' ? 'inactive' : 'active') as 'active' | 'inactive',
+              phone: emp.phone || undefined,
+              address: emp.address || undefined,
+              aadhaarLast4: emp.aadhaarLast4 || emp.aadhaar_last4 || (emp.aadhaar ? String(emp.aadhaar).slice(-4) : undefined),
+              created_at: emp.created_at || new Date().toISOString(),
+              updated_at: emp.updated_at || new Date().toISOString(),
+              deleted_at: emp.deleted_at || null,
+            }));
+          }
+
+          if (Array.isArray(state.attendance)) {
+            state.attendance = state.attendance.map((att: any) => ({
+              id: att.id || generateUUID(),
+              employeeId: att.employeeId || att.employee_id,
+              date: att.date,
+              status: att.status,
+              created_at: att.created_at || new Date().toISOString(),
+              updated_at: att.updated_at || new Date().toISOString(),
+              deleted_at: att.deleted_at || null,
+            }));
+          }
+
+          if (Array.isArray(state.salaryAdvances)) {
+            state.salaryAdvances = state.salaryAdvances.map((adv: any) => ({
+              id: adv.id || generateUUID(),
+              employeeId: adv.employeeId || adv.employee_id,
+              amount: Number(adv.amount || 0),
+              deducted_amount: Number(adv.deducted_amount ?? adv.deductedAmount ?? 0),
+              date: adv.date,
+              reason: adv.reason || undefined,
+              created_at: adv.created_at || new Date().toISOString(),
+              updated_at: adv.updated_at || new Date().toISOString(),
+              deleted_at: adv.deleted_at || null,
+            }));
+          }
+
+          if (Array.isArray(state.borrows)) {
+            state.borrows = state.borrows.map((b: any) => {
+              const amount = Number(b.amount || 0);
+              const repaid = Number(b.repaid_amount ?? b.repaidAmount ?? 0);
+              let status: 'outstanding' | 'partially_repaid' | 'settled' = 'outstanding';
+              if (repaid >= amount && amount > 0) {
+                status = 'settled';
+              } else if (repaid > 0) {
+                status = 'partially_repaid';
+              } else if (b.status === 'settled') {
+                status = 'settled';
+              }
+              return {
+                id: b.id || generateUUID(),
+                employeeId: b.employeeId || b.employee_id,
+                amount,
+                repaid_amount: repaid,
+                status,
+                date: b.date,
+                reason: b.reason || undefined,
+                created_at: b.created_at || new Date().toISOString(),
+                updated_at: b.updated_at || new Date().toISOString(),
+                deleted_at: b.deleted_at || null,
+              };
+            });
+          }
+
+          if (Array.isArray(state.salaryPayments)) {
+            state.salaryPayments = state.salaryPayments.map((p: any) => ({
+              id: p.id || generateUUID(),
+              employeeId: p.employeeId || p.employee_id,
+              month: p.month,
+              gross: Number(p.gross || 0),
+              advance_deducted: Number(p.advance_deducted ?? p.advanceDeducted ?? 0),
+              borrow_deducted: Number(p.borrow_deducted ?? p.borrowDeducted ?? 0),
+              net_paid: Number(p.net_paid ?? p.netPaid ?? 0),
+              paid_on: p.paid_on || p.paidOn,
+              payment_ref: p.payment_ref || p.paymentRef || undefined,
+              note: p.note || undefined,
+              created_at: p.created_at || new Date().toISOString(),
+              updated_at: p.updated_at || new Date().toISOString(),
+              deleted_at: p.deleted_at || null,
+            }));
+          }
+
+          if (Array.isArray(state.salaryDeductionLedger)) {
+            state.salaryDeductionLedger = state.salaryDeductionLedger.map((l: any) => ({
+              id: l.id || generateUUID(),
+              salaryPaymentId: l.salaryPaymentId || l.salary_payment_id,
+              targetType: (l.targetType || l.target_type || 'advance') as 'advance' | 'borrow',
+              targetId: l.targetId || l.target_id,
+              amount: Number(l.amount || 0),
+              created_at: l.created_at || new Date().toISOString(),
+              updated_at: l.updated_at || new Date().toISOString(),
+              deleted_at: l.deleted_at || null,
+            }));
+          }
+
+          // If employees is still empty, seed "bablu" as requested
+          if (state.employees.length === 0) {
+            state.employees = [
+              {
+                id: generateUUID(),
+                name: 'bablu',
+                roleId: state.staffRoles.find((r: StaffRole) => r.name.toLowerCase().includes('house'))?.id || state.staffRoles[0]?.id || 'role-housekeeping',
+                shiftId: state.shifts[0]?.id || 'shift-morning',
+                monthlySalary: 5000,
+                joiningDate: '2026-04-24',
+                status: 'active',
+                phone: '',
+                address: '',
+                aadhaarLast4: '4321',
+                created_at: '2026-04-24T00:00:00.000Z',
+                updated_at: new Date().toISOString(),
+                deleted_at: null
+              }
+            ];
+          }
+
           if (state.isAuthenticated) {
             const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours expiry
             const now = Date.now();
@@ -821,3 +1414,12 @@ export const useStore = create<StoreState>()(
     }
   )
 );
+
+if (typeof window !== 'undefined') {
+  (window as any).__useStore = useStore;
+}
+
+
+if (typeof window !== 'undefined') {
+  (window as any).__useStore = useStore;
+}

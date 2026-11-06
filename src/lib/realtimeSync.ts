@@ -272,7 +272,9 @@ export function subscribeToRealtime() {
     })
     // 7. Categories changes
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_categories' }, (payload) => {
-      const { eventType, new: newRow, old: oldRow } = payload;
+      const { eventType } = payload;
+      const newRow = payload.new as Record<string, any> | undefined;
+      const oldRow = payload.old as Record<string, any> | undefined;
       const state = store();
       if (eventType === 'DELETE' && oldRow?.name) {
         useStore.setState({ customCategories: state.customCategories.filter(c => c !== oldRow.name) });
@@ -282,7 +284,9 @@ export function subscribeToRealtime() {
     })
     // 8. Bed Types changes
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_bed_types' }, (payload) => {
-      const { eventType, new: newRow, old: oldRow } = payload;
+      const { eventType } = payload;
+      const newRow = payload.new as Record<string, any> | undefined;
+      const oldRow = payload.old as Record<string, any> | undefined;
       const state = store();
       if (eventType === 'DELETE' && oldRow?.name) {
         useStore.setState({ customBedTypes: state.customBedTypes.filter(b => b !== oldRow.name) });
@@ -292,7 +296,9 @@ export function subscribeToRealtime() {
     })
     // 9. Room Holds changes
     .on('postgres_changes', { event: '*', schema: 'public', table: 'room_holds' }, (payload) => {
-      const { eventType, new: newRow, old: oldRow } = payload;
+      const { eventType } = payload;
+      const newRow = payload.new as Record<string, any> | undefined;
+      const oldRow = payload.old as Record<string, any> | undefined;
       const state = store();
       
       if (eventType === 'DELETE' && oldRow?.id) {

@@ -21,8 +21,8 @@ const Admin = () => {
   } = useStore(useShallow(state => ({
     rooms: state.rooms, roomStatus: state.roomStatus, bookings: state.bookings, addRoom: state.addRoom, updateRoom: state.updateRoom, removeRoom: state.removeRoom, setRoomStatus: state.setRoomStatus,
     invoiceSettings: state.invoiceSettings, updateInvoiceSettings: state.updateInvoiceSettings,
-    customCategories: state.customCategories || ['AC', 'Air Cooled', 'Hall', 'Non-AC', 'Deluxe'], addCategory: state.addCategory, removeCategory: state.removeCategory,
-    customBedTypes: state.customBedTypes || ['Single Bed', 'Double Bed', 'King Size', 'Queen Bed', '3 Bed', '4 Bed'], addBedType: state.addBedType, removeBedType: state.removeBedType,
+    customCategories: state.customCategories || ['AC', 'Air Cooled', 'Hall', 'Non-AC', 'Deluxe'], addCategory: state.addCustomCategory, removeCategory: state.removeCustomCategory,
+    customBedTypes: state.customBedTypes || ['Single Bed', 'Double Bed', 'King Size', 'Queen Bed', '3 Bed', '4 Bed'], addBedType: state.addCustomBedType, removeBedType: state.removeCustomBedType,
     isDeveloperMode: state.isDeveloperMode, setDeveloperMode: state.setDeveloperMode,
     appUsers: state.appUsers, appRoles: state.appRoles, addAppUser: state.addAppUser, updateAppUser: state.updateAppUser, deleteAppUser: state.deleteAppUser
   })));
