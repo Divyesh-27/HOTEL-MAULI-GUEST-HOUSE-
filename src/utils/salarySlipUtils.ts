@@ -1,7 +1,11 @@
-import { 
-  Employee, StaffRole, Shift, AttendanceRecord, SalaryAdvance, 
-  BorrowRecord, SalaryPayment, SalaryDeductionLedgerItem, InvoiceSettings 
+import {
+  Employee, StaffRole, Shift, AttendanceRecord, SalaryAdvance,
+  BorrowRecord, SalaryPayment, SalaryDeductionLedgerItem, InvoiceSettings, SalaryAdjustment
 } from '@/types';
+import {
+  SalaryCycle, calculateCycleAttendance, calculateCycleFinancials,
+  formatDDMMYYYY, getDaysInMonth, diffDaysInclusive
+} from './salaryCycleUtils';
 
 export interface SalarySlipItem {
   id: string;
@@ -14,12 +18,19 @@ export interface SalarySlipItem {
 
 export interface SalarySlipData {
   lodgeName: string;
+  hotelAddress?: string;
+  hotelPhone?: string;
+  slipNumber: string; // e.g. SLIP-2026-0001 or "DRAFT"
   month: string; // YYYY-MM
-  monthFormatted: string; // e.g. "November 2026"
+  monthFormatted: string; // e.g. "November 2026" or "22-11-2026 to 21-12-2026"
+  cycleStartFormatted: string; // DD-MM-YYYY
+  cycleEndFormatted: string;   // DD-MM-YYYY
+  cycleDays: number;
   printedDate: string; // DD-MM-YYYY
   isPaid: boolean;
-  statusText: string; // "PAID" | "DRAFT - NOT YET PAID"
-  
+  isReversed: boolean;
+  statusText: string; // "PAID" | "DRAFT - NOT YET PAID" | "REVERSED"
+
   // Employee Info (NO Aadhaar, NO phone, NO address)
   employeeName: string;
   roleName: string;
@@ -29,15 +40,26 @@ export interface SalarySlipData {
   // Attendance
   presentDays: number;
   absentDays: number;
+  paidLeaveDays: number;
+  unpaidLeaveDays: number;
+  notMarkedDays: number;
+  deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
 
   // Financials
   grossSalary: number;
+  salaryUsed: number;
+  perDayAmount: number;
+  attendanceDeduction: number;
+  earnedAmount: number;
+
   bfAdvances: number; // Brought forward advances
   bfBorrows: number;  // Brought forward borrows
   bfTotal: number;
 
   totalAdvanceDeducted: number;
   totalBorrowDeducted: number;
+  adjustmentsTotal: number;
+  adjustmentsList: Array<{ reason: string; amount: number }>;
   totalDeductions: number;
   netPaid: number;
   paidOn: string; // DD-MM-YYYY or "-"
@@ -66,7 +88,6 @@ export interface SalarySlipData {
 export function formatIndianDate(dateStr?: string | null): string {
   if (!dateStr) return '-';
   try {
-    // If format is YYYY-MM-DD
     const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (match) {
       return `${match[3]}-${match[2]}-${match[1]}`;
@@ -103,35 +124,76 @@ export function formatMonthYear(monthStr: string): string {
 }
 
 /**
- * Compiles all data required for the monthly salary slip
+ * Compiles all data required for the salary slip (cycle or month)
  */
 export function calculateSalarySlipData(params: {
   employee: Employee;
-  month: string; // YYYY-MM
+  cycle?: SalaryCycle;
+  month?: string;
   staffRoles: StaffRole[];
   shifts: Shift[];
   attendance: AttendanceRecord[];
   salaryAdvances: SalaryAdvance[];
   borrows: BorrowRecord[];
+  salaryAdjustments?: SalaryAdjustment[];
   salaryPayments: SalaryPayment[];
   salaryDeductionLedger?: SalaryDeductionLedgerItem[];
   invoiceSettings?: InvoiceSettings;
 }): SalarySlipData {
   const {
     employee,
-    month,
+    cycle,
+    month: inputMonth,
     staffRoles,
     shifts,
     attendance,
     salaryAdvances,
     borrows,
+    salaryAdjustments = [],
     salaryPayments,
     salaryDeductionLedger = [],
     invoiceSettings,
   } = params;
 
-  const lodgeName = 'HOTEL MAULI GUEST HOUSE';
-  const monthFormatted = formatMonthYear(month);
+  const anySettings = (invoiceSettings || {}) as any;
+  const lodgeName = anySettings.hotel_name || anySettings.hotelName || 'HOTEL MAULI GUEST HOUSE';
+  const hotelAddress = anySettings.hotel_address || anySettings.address || 'Prop. J.R. Jaiswal';
+  const hotelPhone = anySettings.hotel_phone || anySettings.phone || '9405694695';
+
+  // Determine cycle dates
+  let cycleStart = '';
+  let cycleEnd = '';
+  let cycleDays = 30;
+  let cycleMonthStr = inputMonth || '';
+
+  if (cycle) {
+    cycleStart = cycle.startDate;
+    cycleEnd = cycle.endDate;
+    cycleDays = cycle.cycleDays;
+    cycleMonthStr = cycle.startDate.slice(0, 7);
+  } else if (inputMonth) {
+    cycleStart = `${inputMonth}-01`;
+    const [yStr, mStr] = inputMonth.split('-');
+    const y = parseInt(yStr, 10);
+    const m = parseInt(mStr, 10);
+    const daysInM = getDaysInMonth(y, m);
+    cycleEnd = `${inputMonth}-${String(daysInM).padStart(2, '0')}`;
+    cycleDays = diffDaysInclusive(cycleStart, cycleEnd);
+    cycleMonthStr = inputMonth;
+  } else {
+    const nowStr = new Date().toISOString().slice(0, 7);
+    cycleMonthStr = nowStr;
+    cycleStart = `${nowStr}-01`;
+    cycleEnd = `${nowStr}-28`;
+    cycleDays = 28;
+  }
+
+  const cycleStartFormatted = formatIndianDate(cycleStart);
+  const cycleEndFormatted = formatIndianDate(cycleEnd);
+  const monthFormatted = cycle
+    ? `${cycleStartFormatted} to ${cycleEndFormatted}`
+    : formatMonthYear(cycleMonthStr);
+
   const now = new Date();
   const printedDate = `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}`;
 
@@ -140,42 +202,85 @@ export function calculateSalarySlipData(params: {
   const shiftName = shiftObj ? `${shiftObj.name} (${shiftObj.startTime} - ${shiftObj.endTime})` : 'Standard';
   const joiningDate = formatIndianDate(employee.joiningDate);
 
-  // Check if month is paid
-  const payment = salaryPayments.find(
-    p => p.employeeId === employee.id && p.month === month && !p.deleted_at
+  // Match existing payment for this cycle/month
+  const payment = cycle?.payment || salaryPayments.find(
+    p => p.employeeId === employee.id && !p.deleted_at && (
+      (p.cycleStart && p.cycleEnd && p.cycleStart === cycleStart && p.cycleEnd === cycleEnd) ||
+      (!p.cycleStart && p.month === cycleMonthStr)
+    )
   ) || null;
-  const isPaid = !!payment;
-  const statusText = isPaid ? 'PAID' : 'DRAFT - NOT YET PAID';
 
-  // Attendance
-  const presentDays = attendance.filter(
-    a => a.employeeId === employee.id && a.date.startsWith(month) && a.status === 'Present' && !a.deleted_at
-  ).length;
-  const absentDays = attendance.filter(
-    a => a.employeeId === employee.id && a.date.startsWith(month) && a.status === 'Absent' && !a.deleted_at
-  ).length;
+  const isReversed = payment?.status === 'Reversed';
+  const isPaid = !!payment && !isReversed;
+  const statusText = isReversed ? 'REVERSED' : (isPaid ? 'PAID' : 'DRAFT - NOT YET PAID');
+  const slipNumber = payment?.slipNumber || (payment ? 'SLIP-PAID' : 'DRAFT');
 
-  const monthStart = `${month}-01`;
-  const [yearStr, monthNumStr] = month.split('-');
-  const lastDayNum = new Date(parseInt(yearStr, 10), parseInt(monthNumStr, 10), 0).getDate();
-  const monthEnd = `${month}-${String(lastDayNum).padStart(2, '0')}`;
+  // Attendance & Deductions
+  let presentDays = 0;
+  let absentDays = 0;
+  let paidLeaveDays = 0;
+  let unpaidLeaveDays = 0;
+  let notMarkedDays = 0;
+  let deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }> = [];
+  let attendanceDeduction = 0;
+  let grossSalary = employee.monthlySalary;
+  let salaryUsed = employee.monthlySalary;
+  let perDayAmount = cycleDays > 0 ? Math.round((salaryUsed / cycleDays) * 100) / 100 : 0;
+  let earnedAmount = salaryUsed;
 
-  // Employee advances and borrows
+  if (payment) {
+    // Snapshot from finalized payment
+    grossSalary = payment.gross;
+    salaryUsed = payment.salaryUsed || payment.gross;
+    cycleDays = payment.cycleDays || cycleDays;
+    perDayAmount = payment.perDay || (cycleDays > 0 ? Math.round((salaryUsed / cycleDays) * 100) / 100 : 0);
+    presentDays = payment.presentDays ?? 0;
+    absentDays = payment.absentDays ?? 0;
+    paidLeaveDays = payment.paidLeaveDays ?? 0;
+    unpaidLeaveDays = payment.unpaidLeaveDays ?? 0;
+    notMarkedDays = payment.notMarkedDays ?? 0;
+    deductedDates = payment.deductedDates || [];
+    attendanceDeduction = payment.attendanceDeduction ?? 0;
+    earnedAmount = payment.earnedAmount ?? Math.max(0, salaryUsed - attendanceDeduction);
+  } else {
+    // Live calculation for draft
+    const attSummary = calculateCycleAttendance(
+      employee,
+      { startDate: cycleStart, endDate: cycleEnd, cycleDays },
+      attendance
+    );
+    presentDays = attSummary.presentDays;
+    absentDays = attSummary.absentDays;
+    paidLeaveDays = attSummary.paidLeaveDays;
+    unpaidLeaveDays = attSummary.unpaidLeaveDays;
+    notMarkedDays = attSummary.notMarkedDays;
+    deductedDates = attSummary.deductedDates.map(d => ({
+      date: d.date,
+      type: d.type,
+      amount: perDayAmount,
+    }));
+    const deductedPaise = cycleDays > 0
+      ? Math.round((salaryUsed * 100 * attSummary.deductedDays) / cycleDays)
+      : 0;
+    attendanceDeduction = deductedPaise / 100;
+    earnedAmount = Math.max(0, salaryUsed - attendanceDeduction);
+  }
+
+  // Advances & Borrows
   const empAdvances = salaryAdvances.filter(a => a.employeeId === employee.id && !a.deleted_at);
   const empBorrows = borrows.filter(b => b.employeeId === employee.id && !b.deleted_at);
-
-  // Active ledger entries
   const activeLedger = salaryDeductionLedger.filter(l => !l.deleted_at);
 
-  // Helper: Find prior payments for this employee
   const priorPayments = salaryPayments.filter(
-    p => p.employeeId === employee.id && p.month < month && !p.deleted_at
+    p => p.employeeId === employee.id && !p.deleted_at && (
+      (p.cycleEnd && p.cycleEnd < cycleStart) ||
+      (!p.cycleEnd && p.month < cycleMonthStr)
+    )
   );
   const priorPaymentIds = new Set(priorPayments.map(p => p.id));
 
-  // --- BROUGHT FORWARD CALCULATIONS (start of this month) ---
-  // Prior advances: taken before monthStart
-  const priorAdvances = empAdvances.filter(a => a.date < monthStart);
+  // Brought forward calculations (advances and borrows taken before cycleStart)
+  const priorAdvances = empAdvances.filter(a => (a.transactionDate || a.date) < cycleStart);
   let bfAdvances = 0;
   for (const pa of priorAdvances) {
     const priorDeductionsForAdv = activeLedger
@@ -185,8 +290,7 @@ export function calculateSalarySlipData(params: {
     bfAdvances += paBal;
   }
 
-  // Prior borrows: taken before monthStart
-  const priorBorrows = empBorrows.filter(b => b.date < monthStart);
+  const priorBorrows = empBorrows.filter(b => (b.transactionDate || b.date) < cycleStart);
   let bfBorrows = 0;
   for (const pb of priorBorrows) {
     const priorRepaymentsForBorrow = activeLedger
@@ -197,48 +301,45 @@ export function calculateSalarySlipData(params: {
   }
   const bfTotal = bfAdvances + bfBorrows;
 
-  // --- THIS MONTH ENTRIES ---
-  const currentMonthAdvances = empAdvances.filter(a => a.date >= monthStart && a.date <= monthEnd);
-  const currentMonthBorrows = empBorrows.filter(b => b.date >= monthStart && b.date <= monthEnd);
+  // This cycle's advances & borrows
+  const currentAdvances = empAdvances.filter(a => {
+    const d = a.transactionDate || a.date;
+    return d >= cycleStart && d <= cycleEnd;
+  });
+  const currentBorrows = empBorrows.filter(b => {
+    const d = b.transactionDate || b.date;
+    return d >= cycleStart && d <= cycleEnd;
+  });
 
-  // Check ledger for this payment
-  const currentPaymentLedger = payment 
+  const currentPaymentLedger = payment
     ? activeLedger.filter(l => l.salaryPaymentId === payment.id)
     : [];
   const paymentHasLedger = isPaid && currentPaymentLedger.length > 0;
 
-  // --- COMPILE ADVANCES TABLE ITEMS ---
-  const advancesList: SalarySlipItem[] = currentMonthAdvances.map(adv => {
+  // Compile Advances Table
+  const advancesList: SalarySlipItem[] = currentAdvances.map(adv => {
     let deducted: number | 'Detail not recorded' = 0;
     if (isPaid) {
       if (paymentHasLedger) {
         const item = currentPaymentLedger.find(l => l.targetId === adv.id && l.targetType === 'advance');
         deducted = item ? item.amount : 0;
       } else {
-        deducted = 'Detail not recorded';
+        deducted = adv.deducted_amount || adv.amount;
       }
     } else {
       deducted = 0;
     }
 
-    // Balance outstanding calculation
     let balance = adv.amount;
     if (isPaid) {
-      if (paymentHasLedger) {
-        const allDeductionsForAdv = activeLedger
-          .filter(l => l.targetId === adv.id && l.targetType === 'advance')
-          .reduce((sum, l) => sum + l.amount, 0);
-        balance = Math.max(0, adv.amount - allDeductionsForAdv);
-      } else {
-        balance = Math.max(0, adv.amount - (adv.deducted_amount || 0));
-      }
-    } else {
       balance = Math.max(0, adv.amount - (adv.deducted_amount || 0));
+    } else {
+      balance = adv.amount;
     }
 
     return {
       id: adv.id,
-      date: formatIndianDate(adv.date),
+      date: formatIndianDate(adv.transactionDate || adv.date),
       amount: adv.amount,
       reason: adv.reason?.trim() ? adv.reason : '-',
       deductedOrRecovered: deducted,
@@ -247,44 +348,31 @@ export function calculateSalarySlipData(params: {
   });
 
   const advancesTotalAmount = advancesList.reduce((s, a) => s + a.amount, 0);
-  const advancesTotalDeducted: number | 'Detail not recorded' = isPaid
-    ? (paymentHasLedger 
-        ? advancesList.reduce((s, a) => s + (typeof a.deductedOrRecovered === 'number' ? a.deductedOrRecovered : 0), 0)
-        : (payment?.advance_deducted ?? 'Detail not recorded'))
-    : 0;
+  const advancesTotalDeducted = isPaid ? (payment?.advance_deducted ?? advancesList.reduce((s, a) => s + (typeof a.deductedOrRecovered === 'number' ? a.deductedOrRecovered : 0), 0)) : 0;
   const advancesTotalBalance = advancesList.reduce((s, a) => s + a.balanceOutstanding, 0);
 
-  // --- COMPILE BORROWS TABLE ITEMS ---
-  const borrowsList: SalarySlipItem[] = currentMonthBorrows.map(b => {
+  // Compile Borrows Table
+  const borrowsList: SalarySlipItem[] = currentBorrows.map(b => {
     let recovered: number | 'Detail not recorded' = 0;
     if (isPaid) {
-      if (paymentHasLedger) {
+      if (payment?.borrowRecoveries && payment.borrowRecoveries.length > 0) {
+        const rec = payment.borrowRecoveries.find(r => r.borrowId === b.id);
+        recovered = rec ? rec.amount : 0;
+      } else if (paymentHasLedger) {
         const item = currentPaymentLedger.find(l => l.targetId === b.id && l.targetType === 'borrow');
         recovered = item ? item.amount : 0;
       } else {
-        recovered = 'Detail not recorded';
+        recovered = b.repaid_amount || 0;
       }
     } else {
       recovered = 0;
     }
 
-    let balance = b.amount;
-    if (isPaid) {
-      if (paymentHasLedger) {
-        const allRepaymentsForBorrow = activeLedger
-          .filter(l => l.targetId === b.id && l.targetType === 'borrow')
-          .reduce((sum, l) => sum + l.amount, 0);
-        balance = Math.max(0, b.amount - allRepaymentsForBorrow);
-      } else {
-        balance = Math.max(0, b.amount - (b.repaid_amount || 0));
-      }
-    } else {
-      balance = Math.max(0, b.amount - (b.repaid_amount || 0));
-    }
+    const balance = Math.max(0, b.amount - (b.repaid_amount || 0));
 
     return {
       id: b.id,
-      date: formatIndianDate(b.date),
+      date: formatIndianDate(b.transactionDate || b.date),
       amount: b.amount,
       reason: b.reason?.trim() ? b.reason : '-',
       deductedOrRecovered: recovered,
@@ -293,30 +381,57 @@ export function calculateSalarySlipData(params: {
   });
 
   const borrowsTotalAmount = borrowsList.reduce((s, b) => s + b.amount, 0);
-  const borrowsTotalRecovered: number | 'Detail not recorded' = isPaid
-    ? (paymentHasLedger 
-        ? borrowsList.reduce((s, b) => s + (typeof b.deductedOrRecovered === 'number' ? b.deductedOrRecovered : 0), 0)
-        : (payment?.borrow_deducted ?? 'Detail not recorded'))
-    : 0;
+  const borrowsTotalRecovered = isPaid ? (payment?.borrow_deducted ?? borrowsList.reduce((s, b) => s + (typeof b.deductedOrRecovered === 'number' ? b.deductedOrRecovered : 0), 0)) : 0;
   const borrowsTotalBalance = borrowsList.reduce((s, b) => s + b.balanceOutstanding, 0);
 
-  // --- SUMMARY FINANCIALS ---
-  const grossSalary = payment ? payment.gross : employee.monthlySalary;
-  const totalAdvanceDeducted = payment ? payment.advance_deducted : 0;
-  const totalBorrowDeducted = payment ? payment.borrow_deducted : 0;
-  const totalDeductions = totalAdvanceDeducted + totalBorrowDeducted;
-  const netPaid = payment ? payment.net_paid : Math.max(0, grossSalary - totalDeductions);
-  const paidOn = payment ? formatIndianDate(payment.paid_on) : '-';
-  const paymentRef = payment?.payment_ref?.trim() ? payment.payment_ref : '-';
-  const note = payment?.note?.trim() ? payment.note : '-';
+  // Adjustments & Final Amounts
+  let totalAdvanceDeducted = 0;
+  let totalBorrowDeducted = 0;
+  let adjustmentsTotal = 0;
+  let adjustmentsList: Array<{ reason: string; amount: number }> = [];
+  let netPaid = 0;
+  let paidOn = '-';
+  let paymentRef = '-';
+  let note = '-';
 
-  // --- CARRIED FORWARD CALCULATIONS (end of this month) ---
+  if (payment) {
+    totalAdvanceDeducted = payment.advance_deducted || 0;
+    totalBorrowDeducted = payment.borrow_deducted || 0;
+    adjustmentsTotal = payment.adjustmentsTotal || 0;
+    adjustmentsList = (payment.adjustmentsApplied || []).map(a => ({ reason: a.reason, amount: a.amount }));
+    netPaid = payment.net_paid;
+    paidOn = formatIndianDate(payment.paid_on);
+    paymentRef = payment.payment_ref?.trim() ? payment.payment_ref : '-';
+    note = payment.note?.trim() ? payment.note : '-';
+  } else {
+    // Draft financials
+    const openAdjustments = salaryAdjustments.filter(
+      a => a.employeeId === employee.id && a.status === 'Open' && !a.deleted_at
+    );
+    adjustmentsTotal = openAdjustments.reduce((sum, a) => sum + a.amount, 0);
+    adjustmentsList = openAdjustments.map(a => ({ reason: a.reason, amount: a.amount }));
+
+    const fin = calculateCycleFinancials(
+      employee.monthlySalary,
+      cycleDays,
+      absentDays + unpaidLeaveDays,
+      advancesTotalAmount,
+      bfAdvances,
+      0, // borrows require explicit selection
+      adjustmentsTotal
+    );
+    totalAdvanceDeducted = fin.advanceDeducted;
+    totalBorrowDeducted = 0;
+    netPaid = fin.netPayable;
+  }
+
+  const totalDeductions = attendanceDeduction + totalAdvanceDeducted + totalBorrowDeducted;
+
+  // Carried forward calculations (end of this cycle)
   let cfAdvances = 0;
   let cfBorrows = 0;
-
-  if (isPaid) {
-    // Advances up to this month end
-    const eligibleAdvances = empAdvances.filter(a => a.date <= monthEnd);
+  if (isPaid && payment) {
+    const eligibleAdvances = empAdvances.filter(a => (a.transactionDate || a.date) <= cycleEnd);
     for (const ea of eligibleAdvances) {
       const allDeductionsForAdv = activeLedger
         .filter(l => l.targetId === ea.id && l.targetType === 'advance' && (l.salaryPaymentId === payment.id || priorPaymentIds.has(l.salaryPaymentId)))
@@ -325,7 +440,7 @@ export function calculateSalarySlipData(params: {
       cfAdvances += rem;
     }
 
-    const eligibleBorrows = empBorrows.filter(b => b.date <= monthEnd);
+    const eligibleBorrows = empBorrows.filter(b => (b.transactionDate || b.date) <= cycleEnd);
     for (const eb of eligibleBorrows) {
       const allRepaymentsForBorrow = activeLedger
         .filter(l => l.targetId === eb.id && l.targetType === 'borrow' && (l.salaryPaymentId === payment.id || priorPaymentIds.has(l.salaryPaymentId)))
@@ -334,18 +449,24 @@ export function calculateSalarySlipData(params: {
       cfBorrows += rem;
     }
   } else {
-    // Unpaid month: carried forward is brought forward + this month additions
-    cfAdvances = bfAdvances + advancesTotalAmount;
-    cfBorrows = bfBorrows + borrowsTotalAmount;
+    cfAdvances = Math.max(0, bfAdvances + advancesTotalAmount - totalAdvanceDeducted);
+    cfBorrows = Math.max(0, bfBorrows + borrowsTotalAmount - totalBorrowDeducted);
   }
   const cfTotal = cfAdvances + cfBorrows;
 
   return {
     lodgeName,
-    month,
+    hotelAddress,
+    hotelPhone,
+    slipNumber,
+    month: cycleMonthStr,
     monthFormatted,
+    cycleStartFormatted,
+    cycleEndFormatted,
+    cycleDays,
     printedDate,
     isPaid,
+    isReversed,
     statusText,
     employeeName: employee.name,
     roleName,
@@ -353,12 +474,22 @@ export function calculateSalarySlipData(params: {
     joiningDate,
     presentDays,
     absentDays,
+    paidLeaveDays,
+    unpaidLeaveDays,
+    notMarkedDays,
+    deductedDates,
     grossSalary,
+    salaryUsed,
+    perDayAmount,
+    attendanceDeduction,
+    earnedAmount,
     bfAdvances,
     bfBorrows,
     bfTotal,
     totalAdvanceDeducted,
     totalBorrowDeducted,
+    adjustmentsTotal,
+    adjustmentsList,
     totalDeductions,
     netPaid,
     paidOn,
@@ -382,7 +513,8 @@ export function calculateSalarySlipData(params: {
  * Generates clean, printer-friendly A4 HTML for the salary slip
  */
 export function generateSalarySlipHtml(data: SalarySlipData): string {
-  const isDraft = !data.isPaid;
+  const isDraft = !data.isPaid && !data.isReversed;
+  const isReversed = data.isReversed;
 
   const formatTableCell = (val: number | 'Detail not recorded') => {
     if (typeof val === 'number') {
@@ -408,50 +540,61 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
           color: #000000;
           background: #ffffff;
           line-height: 1.4;
-          font-size: 11pt;
+          font-size: 10.5pt;
           width: 100%;
+          position: relative;
         }
         .slip-header {
           text-align: center;
           border-bottom: 2px solid #000000;
-          padding-bottom: 10px;
-          margin-bottom: 14px;
+          padding-bottom: 8px;
+          margin-bottom: 12px;
         }
         .slip-header h1 {
-          font-size: 18pt;
+          font-size: 17pt;
           font-weight: 800;
-          margin: 0 0 4px 0;
+          margin: 0 0 2px 0;
           text-transform: uppercase;
           letter-spacing: 0.5px;
+        }
+        .hotel-sub {
+          font-size: 9pt;
+          color: #444444;
+          margin-bottom: 6px;
         }
         .slip-title {
           font-size: 13pt;
           font-weight: 700;
-          margin: 0;
+          margin: 4px 0 0 0;
           letter-spacing: 1px;
         }
         .slip-title.draft {
           color: #b91c1c;
         }
+        .slip-title.reversed {
+          color: #dc2626;
+        }
         .slip-meta-strip {
           display: flex;
           justify-content: space-between;
-          font-size: 9.5pt;
+          font-size: 9pt;
           color: #333333;
           margin-top: 6px;
+          padding-top: 4px;
+          border-top: 1px solid #e0e0e0;
         }
         .info-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 10px;
           border: 1px solid #000000;
-          padding: 10px 14px;
-          margin-bottom: 14px;
+          padding: 8px 12px;
+          margin-bottom: 12px;
           background: #ffffff;
         }
         .info-col p {
-          margin: 3px 0;
-          font-size: 10pt;
+          margin: 2px 0;
+          font-size: 9.5pt;
         }
         .info-label {
           font-weight: 700;
@@ -461,39 +604,41 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         }
         .attendance-strip {
           border: 1px dashed #444444;
-          padding: 6px 12px;
-          font-size: 9.5pt;
-          margin-bottom: 14px;
+          padding: 6px 10px;
+          font-size: 9pt;
+          margin-bottom: 12px;
           background: #fafafa;
         }
         .attendance-strip strong {
           font-weight: 700;
         }
-        .attendance-note {
-          font-style: italic;
-          color: #555555;
-          margin-left: 6px;
+        .deductions-list {
+          margin-top: 4px;
+          font-size: 8.5pt;
+          color: #b91c1c;
         }
         .summary-card {
           border: 1.5px solid #000000;
-          margin-bottom: 16px;
+          margin-bottom: 14px;
           background: #ffffff;
         }
         .summary-header {
           background: #f0f0f0;
           border-bottom: 1px solid #000000;
-          padding: 6px 12px;
+          padding: 5px 12px;
           font-weight: 700;
-          font-size: 10.5pt;
+          font-size: 10pt;
           text-transform: uppercase;
           letter-spacing: 0.5px;
+          display: flex;
+          justify-content: space-between;
         }
         .summary-body {
-          padding: 10px 14px;
+          padding: 8px 12px;
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 12px;
-          font-size: 10pt;
+          gap: 14px;
+          font-size: 9.5pt;
         }
         .summary-row {
           display: flex;
@@ -505,21 +650,40 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
           margin-top: 4px;
           padding-top: 4px;
           font-weight: 800;
-          font-size: 11pt;
+          font-size: 10.5pt;
+        }
+        .calc-formula-box {
+          border: 1px solid #d0d0d0;
+          background: #fdfdfd;
+          padding: 6px 10px;
+          font-size: 9pt;
+          margin-bottom: 12px;
+          border-radius: 4px;
+        }
+        .calc-formula-title {
+          font-weight: 700;
+          font-size: 8.5pt;
+          color: #555555;
+          text-transform: uppercase;
+          margin-bottom: 2px;
+        }
+        .calc-formula-math {
+          font-family: monospace;
+          font-weight: 600;
         }
         .section-title {
-          font-size: 11pt;
+          font-size: 10pt;
           font-weight: 800;
           text-transform: uppercase;
           letter-spacing: 0.5px;
-          margin: 14px 0 6px 0;
+          margin: 10px 0 4px 0;
           border-bottom: 1px solid #000000;
           padding-bottom: 2px;
         }
         table.slip-table {
           width: 100%;
           border-collapse: collapse;
-          margin-bottom: 14px;
+          margin-bottom: 10px;
           page-break-inside: auto;
         }
         table.slip-table thead {
@@ -534,8 +698,8 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         }
         table.slip-table th, table.slip-table td {
           border: 1px solid #444444;
-          padding: 5px 8px;
-          font-size: 9.5pt;
+          padding: 4px 6px;
+          font-size: 9pt;
           text-align: left;
         }
         table.slip-table th {
@@ -556,15 +720,15 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         }
         table.slip-table td.empty-table-cell {
           text-align: center;
-          padding: 12px;
+          padding: 8px;
           font-style: italic;
           color: #555555;
         }
         .forward-block {
           border: 1px solid #666666;
-          padding: 8px 12px;
-          margin-bottom: 14px;
-          font-size: 9.5pt;
+          padding: 6px 10px;
+          margin-bottom: 12px;
+          font-size: 9pt;
           background: #fafafa;
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -577,7 +741,7 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
           display: flex;
           justify-content: space-between;
           align-items: flex-end;
-          margin-top: 40px;
+          margin-top: 30px;
           padding-top: 10px;
           page-break-inside: avoid;
         }
@@ -591,28 +755,55 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         }
         .sig-title {
           font-weight: 700;
-          font-size: 10pt;
+          font-size: 9.5pt;
         }
         .sig-sub {
-          font-size: 9pt;
+          font-size: 8.5pt;
           color: #444444;
         }
+        .watermark-reversed {
+          position: absolute;
+          top: 35%;
+          left: 10%;
+          right: 10%;
+          text-align: center;
+          font-size: 72pt;
+          font-weight: 900;
+          color: rgba(220, 38, 38, 0.18);
+          transform: rotate(-25deg);
+          text-transform: uppercase;
+          letter-spacing: 10px;
+          pointer-events: none;
+          z-index: 999;
+          border: 10px dashed rgba(220, 38, 38, 0.25);
+          padding: 20px;
+        }
       </style>
+
+      ${isReversed ? `<div class="watermark-reversed">REVERSED</div>` : ''}
 
       <!-- 1. HEADER -->
       <div class="slip-header">
         <h1>${data.lodgeName}</h1>
-        <div class="slip-title ${isDraft ? 'draft' : ''}">
-          ${isDraft ? 'SALARY SLIP (DRAFT - NOT YET PAID)' : 'MONTHLY SALARY SLIP'}
+        ${(data.hotelAddress || data.hotelPhone) ? `
+          <div class="hotel-sub">
+            ${data.hotelAddress ? `<span>${data.hotelAddress}</span>` : ''}
+            ${(data.hotelAddress && data.hotelPhone) ? ` &bull; ` : ''}
+            ${data.hotelPhone ? `<span>Phone: ${data.hotelPhone}</span>` : ''}
+          </div>
+        ` : ''}
+        <div class="slip-title ${isDraft ? 'draft' : ''} ${isReversed ? 'reversed' : ''}">
+          ${isDraft ? 'SALARY SLIP (DRAFT - NOT YET PAID)' : (isReversed ? 'SALARY SLIP (REVERSED)' : 'SALARY SLIP')}
         </div>
         <div class="slip-meta-strip">
-          <span><strong>Month:</strong> ${data.monthFormatted}</span>
+          <span><strong>Slip No:</strong> ${data.slipNumber}</span>
+          <span><strong>Cycle:</strong> ${data.monthFormatted} (${data.cycleDays} days)</span>
           <span><strong>Date Printed:</strong> ${data.printedDate}</span>
           <span><strong>Status:</strong> ${data.statusText}</span>
         </div>
       </div>
 
-      <!-- 2. EMPLOYEE DETAILS -->
+      <!-- 2. EMPLOYEE DETAILS (NO Aadhaar, NO phone, NO address) -->
       <div class="info-grid">
         <div class="info-col">
           <p><span class="info-label">Employee Name:</span> <strong>${data.employeeName}</strong></p>
@@ -624,22 +815,67 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         </div>
       </div>
 
-      <!-- 3. ATTENDANCE (Informational Only) -->
+      <!-- 3. ATTENDANCE BREAKDOWN -->
       <div class="attendance-strip">
-        <strong>Attendance this Month:</strong> 
-        Present: <strong>${data.presentDays}</strong> days &nbsp;|&nbsp; 
-        Absent: <strong>${data.absentDays}</strong> days
-        <span class="attendance-note">(Informational only &mdash; attendance does not change monthly salary)</span>
+        <div>
+          <strong>Attendance (${data.cycleDays} Days in Cycle):</strong> 
+          Present: <strong>${data.presentDays}</strong> &nbsp;|&nbsp; 
+          Absent: <strong>${data.absentDays}</strong> &nbsp;|&nbsp; 
+          Paid Leave: <strong>${data.paidLeaveDays}</strong> &nbsp;|&nbsp; 
+          Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong> &nbsp;|&nbsp; 
+          Not Marked: <strong>${data.notMarkedDays}</strong> (paid in full)
+        </div>
+        ${data.deductedDates && data.deductedDates.length > 0 ? `
+          <div class="deductions-list">
+            <strong>Deducted dates (${data.deductedDates.length} days @ ${formatIndianCurrency(data.perDayAmount)}/day):</strong>
+            ${data.deductedDates.map(d => `${formatIndianDate(d.date)} (${d.type})`).join(', ')}
+            &mdash; Total Attendance Deduction: <strong>-${formatIndianCurrency(data.attendanceDeduction)}</strong>
+          </div>
+        ` : `
+          <div style="font-size: 8.5pt; color: #166534; margin-top: 3px;">
+            No attendance deductions for this cycle (100% full pay).
+          </div>
+        `}
       </div>
 
-      <!-- 4. FINANCIAL SUMMARY & BALANCES -->
+      <!-- 4. LINE-BY-LINE CALCULATION FORMULA -->
+      <div class="calc-formula-box">
+        <div class="calc-formula-title">Salary Calculation Breakdown</div>
+        <div class="calc-formula-math">
+          ${formatIndianCurrency(data.salaryUsed)} (Salary) 
+          - ${formatIndianCurrency(data.attendanceDeduction)} (Attendance) 
+          - ${formatIndianCurrency(data.totalAdvanceDeducted)} (Advance) 
+          - ${formatIndianCurrency(data.totalBorrowDeducted)} (Borrow) 
+          ${data.adjustmentsTotal >= 0 ? `+ ${formatIndianCurrency(data.adjustmentsTotal)}` : `- ${formatIndianCurrency(Math.abs(data.adjustmentsTotal))}`} (Adjustments) 
+          = <strong>${formatIndianCurrency(data.netPaid)}</strong>
+        </div>
+      </div>
+
+      <!-- 5. FINANCIAL SUMMARY & BALANCES -->
       <div class="summary-card">
-        <div class="summary-header">Salary & Deductions Summary</div>
+        <div class="summary-header">
+          <span>Financials Summary</span>
+          <span>${data.cycleStartFormatted} &rarr; ${data.cycleEndFormatted}</span>
+        </div>
         <div class="summary-body">
           <div>
             <div class="summary-row">
               <span>Monthly Salary (Gross):</span>
               <strong>${formatIndianCurrency(data.grossSalary)}</strong>
+            </div>
+            <div class="summary-row">
+              <span>Per Day Rate:</span>
+              <span>${formatIndianCurrency(data.perDayAmount)} / day</span>
+            </div>
+            <div class="summary-row">
+              <span>Attendance Deduction:</span>
+              <span style="color: ${data.attendanceDeduction > 0 ? '#b91c1c' : 'inherit'};">
+                ${data.attendanceDeduction > 0 ? `-${formatIndianCurrency(data.attendanceDeduction)}` : '₹0'}
+              </span>
+            </div>
+            <div class="summary-row" style="border-top: 1px dashed #cccccc; margin-top: 3px; padding-top: 3px;">
+              <span><strong>Earned Salary:</strong></span>
+              <strong>${formatIndianCurrency(data.earnedAmount)}</strong>
             </div>
             <div class="summary-row">
               <span>Total Advances Deducted:</span>
@@ -649,18 +885,22 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
               <span>Total Borrow Deducted:</span>
               <span>${formatTableCell(data.totalBorrowDeducted)}</span>
             </div>
-            <div class="summary-row total">
-              <span>Total Deductions:</span>
-              <span>${formatIndianCurrency(data.totalDeductions)}</span>
+            <div class="summary-row">
+              <span>Salary Adjustments:</span>
+              <span>${data.adjustmentsTotal >= 0 ? `+${formatIndianCurrency(data.adjustmentsTotal)}` : `-${formatIndianCurrency(Math.abs(data.adjustmentsTotal))}`}</span>
             </div>
           </div>
 
           <div>
             <div class="summary-row total">
               <span>Net Payable / Paid:</span>
-              <span style="font-size: 13pt; color: ${isDraft ? '#b91c1c' : '#000000'};">
+              <span style="font-size: 13pt; color: ${isDraft ? '#b91c1c' : (isReversed ? '#dc2626' : '#000000')};">
                 ${formatIndianCurrency(data.netPaid)}
               </span>
+            </div>
+            <div class="summary-row">
+              <span>Payment Status:</span>
+              <strong>${data.statusText}</strong>
             </div>
             <div class="summary-row">
               <span>Paid on Date:</span>
@@ -678,22 +918,22 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         </div>
       </div>
 
-      <!-- 5. BROUGHT FORWARD & CARRIED FORWARD -->
+      <!-- 6. BROUGHT FORWARD & CARRIED FORWARD -->
       <div class="forward-block">
         <div class="forward-item">
-          <strong>Brought forward from earlier months:</strong>
+          <strong>Brought forward from earlier cycles:</strong>
           <span>Advances: ${formatIndianCurrency(data.bfAdvances)} &nbsp;|&nbsp; Borrows: ${formatIndianCurrency(data.bfBorrows)}</span>
           <span><strong>Total Brought Forward:</strong> ${formatIndianCurrency(data.bfTotal)}</span>
         </div>
         <div class="forward-item">
-          <strong>Carried forward to next month:</strong>
+          <strong>Carried forward to next cycle:</strong>
           <span>Advances: ${formatIndianCurrency(data.cfAdvances)} &nbsp;|&nbsp; Borrows: ${formatIndianCurrency(data.cfBorrows)}</span>
           <span><strong>Total Carried Forward:</strong> ${formatIndianCurrency(data.cfTotal)}</span>
         </div>
       </div>
 
-      <!-- 6. ADVANCES TABLE FOR THAT MONTH -->
-      <div class="section-title">Advances for ${data.monthFormatted}</div>
+      <!-- 7. ADVANCES TABLE FOR THAT CYCLE -->
+      <div class="section-title">Advances in Cycle (${data.monthFormatted})</div>
       <table class="slip-table">
         <thead>
           <tr>
@@ -707,7 +947,7 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         <tbody>
           ${data.advancesList.length === 0 ? `
             <tr>
-              <td colspan="5" class="empty-table-cell">None this month</td>
+              <td colspan="5" class="empty-table-cell">None in this cycle</td>
             </tr>
           ` : data.advancesList.map(a => `
             <tr>
@@ -730,8 +970,8 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         </tfoot>
       </table>
 
-      <!-- 7. BORROWS TABLE FOR THAT MONTH -->
-      <div class="section-title">Borrows for ${data.monthFormatted}</div>
+      <!-- 8. BORROWS TABLE FOR THAT CYCLE -->
+      <div class="section-title">Borrows in Cycle (${data.monthFormatted})</div>
       <table class="slip-table">
         <thead>
           <tr>
@@ -745,7 +985,7 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         <tbody>
           ${data.borrowsList.length === 0 ? `
             <tr>
-              <td colspan="5" class="empty-table-cell">None this month</td>
+              <td colspan="5" class="empty-table-cell">None in this cycle</td>
             </tr>
           ` : data.borrowsList.map(b => `
             <tr>
@@ -768,7 +1008,34 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         </tfoot>
       </table>
 
-      <!-- 8. SIGNATURE LINES -->
+      ${data.adjustmentsList && data.adjustmentsList.length > 0 ? `
+        <!-- 9. ADJUSTMENTS TABLE -->
+        <div class="section-title">Salary Adjustments Applied</div>
+        <table class="slip-table">
+          <thead>
+            <tr>
+              <th style="width: 70%;">Reason</th>
+              <th class="text-right" style="width: 30%;">Adjustment Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.adjustmentsList.map(adj => `
+              <tr>
+                <td>${adj.reason}</td>
+                <td class="text-right">${adj.amount >= 0 ? `+${formatIndianCurrency(adj.amount)}` : `-${formatIndianCurrency(Math.abs(adj.amount))}`}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr class="total-row">
+              <td>Total Adjustments</td>
+              <td class="text-right">${data.adjustmentsTotal >= 0 ? `+${formatIndianCurrency(data.adjustmentsTotal)}` : `-${formatIndianCurrency(Math.abs(data.adjustmentsTotal))}`}</td>
+            </tr>
+          </tfoot>
+        </table>
+      ` : ''}
+
+      <!-- 10. SIGNATURE LINES -->
       <div class="signatures-area">
         <div class="sig-box">
           <div class="sig-line"></div>

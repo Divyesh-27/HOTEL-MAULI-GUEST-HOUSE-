@@ -5,11 +5,12 @@ import {
   InvoiceSettings, DEFAULT_INVOICE_SETTINGS, AppUser, AppRole, 
   DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, RoomHold,
   StaffRole, Shift, Employee, AttendanceRecord, SalaryAdvance, BorrowRecord, SalaryPayment,
-  SalaryDeductionLedgerItem
+  SalaryDeductionLedgerItem, SalaryAdjustment
 } from '@/types';
 import { generateUUID } from '@/lib/uuid';
 import { getRoomStatusOnDate, normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 import { toLocalDateString } from '@/utils/dateUtils';
+import { generateEmployeeCycles, generateSlipNumber, formatDDMMYYYY } from '@/utils/salaryCycleUtils';
 import {
   pushInvoiceSettingsToCloud,
   pushRoomToCloud,
@@ -181,6 +182,7 @@ interface StoreState {
   attendance: AttendanceRecord[];
   salaryAdvances: SalaryAdvance[];
   borrows: BorrowRecord[];
+  salaryAdjustments: SalaryAdjustment[];
   salaryPayments: SalaryPayment[];
   salaryDeductionLedger: SalaryDeductionLedgerItem[];
 
@@ -190,10 +192,75 @@ interface StoreState {
   addEmployee: (employee: Omit<Employee, 'id' | 'created_at' | 'updated_at'>) => Employee;
   updateEmployee: (id: string, updates: Partial<Employee>) => void;
   softDeleteEmployee: (id: string) => void;
-  markAttendance: (employeeId: string, date: string, status: 'Present' | 'Absent') => void;
+  markAttendance: (employeeId: string, date: string, status: 'Present' | 'Absent' | 'Paid Leave' | 'Unpaid Leave') => void;
   markAllPresent: (date: string) => void;
   addSalaryAdvance: (advance: { employeeId: string; amount: number; date: string; reason?: string }) => void;
+  updateSalaryAdvance: (id: string, updates: Partial<SalaryAdvance>) => { success: boolean; error?: string };
+  deleteSalaryAdvance: (id: string) => { success: boolean; error?: string };
   addBorrow: (borrow: { employeeId: string; amount: number; date: string; reason?: string }) => void;
+  updateBorrow: (id: string, updates: Partial<BorrowRecord>) => { success: boolean; error?: string };
+  deleteBorrow: (id: string) => { success: boolean; error?: string };
+  addSalaryAdjustment: (adjustment: { employeeId: string; amount: number; reason: string; cycleId?: string; type?: 'manual' | 'auto_attendance_change' | 'late_advance' }) => SalaryAdjustment;
+  deleteSalaryAdjustment: (id: string) => { success: boolean; error?: string };
+  executeCyclePayout: (payout: {
+    employeeId: string;
+    cycleStart: string;
+    cycleEnd: string;
+    cycleDays: number;
+    salaryUsed: number;
+    perDay: number;
+    gross: number;
+    presentDays: number;
+    absentDays: number;
+    paidLeaveDays: number;
+    unpaidLeaveDays: number;
+    notMarkedDays: number;
+    deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+    attendanceDeduction: number;
+    earnedAmount: number;
+    advanceDeducted: number;
+    carriedForwardAdvanceIn: number;
+    carriedForwardAdvanceOut: number;
+    borrowDeducted: number;
+    borrowRecoveries: Array<{ borrowId: string; amount: number; reason?: string }>;
+    adjustmentsTotal: number;
+    adjustmentsApplied: Array<{ id: string; amount: number; reason: string }>;
+    netPaid: number;
+    paidOn: string;
+    paymentRef?: string;
+    note?: string;
+    isFinalSettlement?: boolean;
+    lastWorkingDate?: string;
+  }) => { success: boolean; paymentId?: string; slipNumber?: string; error?: string };
+  reverseCyclePayout: (paymentId: string, reason: string) => { success: boolean; error?: string };
+  finalSettlement: (employeeId: string, settlementData: {
+    lastWorkingDate: string;
+    cycleStart: string;
+    cycleEnd: string;
+    cycleDays: number;
+    salaryUsed: number;
+    perDay: number;
+    gross: number;
+    presentDays: number;
+    absentDays: number;
+    paidLeaveDays: number;
+    unpaidLeaveDays: number;
+    notMarkedDays: number;
+    deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+    attendanceDeduction: number;
+    earnedAmount: number;
+    advanceDeducted: number;
+    carriedForwardAdvanceIn: number;
+    carriedForwardAdvanceOut: number;
+    borrowDeducted: number;
+    borrowRecoveries: Array<{ borrowId: string; amount: number; reason?: string }>;
+    adjustmentsTotal: number;
+    adjustmentsApplied: Array<{ id: string; amount: number; reason: string }>;
+    netPaid: number;
+    paidOn: string;
+    paymentRef?: string;
+    note?: string;
+  }) => { success: boolean; paymentId?: string; error?: string };
   executePayout: (payout: { employeeId: string; month: string; gross: number; advanceDeducted: number; borrowDeducted: number; netPaid: number; paidOn: string; paymentRef?: string; note?: string }) => { success: boolean; error?: string };
   voidPayout: (paymentId: string) => { success: boolean; error?: string };
   
@@ -264,6 +331,7 @@ export const useStore = create<StoreState>()(
       attendance: [],
       salaryAdvances: [],
       borrows: [],
+      salaryAdjustments: [],
       salaryPayments: [],
       salaryDeductionLedger: [],
       billCounter: { date: '', count: 0 },
@@ -520,11 +588,28 @@ export const useStore = create<StoreState>()(
         return newEmployee;
       },
 
-      updateEmployee: (id, updates) => set((state) => ({
-        employees: state.employees.map((emp) =>
-          emp.id === id ? { ...emp, ...updates, updated_at: new Date().toISOString() } : emp
-        ),
-      })),
+      updateEmployee: (id, updates) => set((state) => {
+        const emp = state.employees.find((e) => e.id === id);
+        if (!emp) return state;
+
+        // PRD Section 1: Joining date can't be edited after the first payout
+        let safeUpdates = { ...updates };
+        if (updates.joiningDate && updates.joiningDate !== emp.joiningDate) {
+          const hasPaidSlip = (state.salaryPayments || []).some(
+            (p) => p.employeeId === id && p.status === 'Paid' && !p.deleted_at
+          );
+          if (hasPaidSlip) {
+            console.warn('[useStore] Cannot edit joining date after first payout has been made.');
+            safeUpdates.joiningDate = emp.joiningDate;
+          }
+        }
+
+        return {
+          employees: state.employees.map((e) =>
+            e.id === id ? { ...e, ...safeUpdates, updated_at: new Date().toISOString() } : e
+          ),
+        };
+      }),
 
       softDeleteEmployee: (id) => set((state) => ({
         employees: state.employees.map((emp) =>
@@ -533,27 +618,79 @@ export const useStore = create<StoreState>()(
       })),
 
       markAttendance: (employeeId, date, status) => set((state) => {
-        const existingIdx = state.attendance.findIndex((a) => a.employeeId === employeeId && a.date === date);
+        const emp = state.employees.find((e) => e.id === employeeId && !e.deleted_at);
+        if (!emp) return state;
+
+        // Bounds check: only past/current dates between joiningDate and today can be marked
+        const todayStr = toLocalDateString();
+        if (date < emp.joiningDate || date > todayStr) {
+          console.warn(`[markAttendance] Date ${date} outside allowed range [${emp.joiningDate}, ${todayStr}]`);
+          return state;
+        }
+
         const now = new Date().toISOString();
+        const existingIdx = state.attendance.findIndex((a) => a.employeeId === employeeId && a.date === date && !a.deleted_at);
+        const oldStatus = existingIdx >= 0 ? state.attendance[existingIdx].status : null;
+
+        // Check if date belongs to an already Paid cycle
+        const cycles = generateEmployeeCycles(emp, todayStr, state.salaryPayments, state.attendance);
+        const paidCycle = cycles.find((c) => c.status === 'Paid' && date >= c.startDate && date <= c.endDate && c.payment);
+
+        let newAdjustments = state.salaryAdjustments || [];
+
+        if (paidCycle && paidCycle.payment) {
+          // PRD Section 6: Post-payout attendance changes auto-generate pending SalaryAdjustment
+          const wasOldDeducted = (oldStatus === 'Absent' || oldStatus === 'Unpaid Leave');
+          const isNewDeducted = (status === 'Absent' || status === 'Unpaid Leave');
+
+          if (wasOldDeducted !== isNewDeducted) {
+            const cycleDays = paidCycle.cycleDays || 30;
+            const salaryUsed = paidCycle.payment.salaryUsed || emp.monthlySalary;
+            const perDayPaise = Math.round((salaryUsed * 100) / cycleDays);
+
+            // If formerly deducted and now present/paid leave -> employee is owed refund (+ amount)
+            // If formerly not deducted and now absent/unpaid leave -> deduction (- amount)
+            const diffPaise = wasOldDeducted && !isNewDeducted ? perDayPaise : -perDayPaise;
+            const adjAmount = diffPaise / 100;
+
+            const autoAdj: SalaryAdjustment = {
+              id: generateUUID(),
+              employeeId,
+              cycleId: paidCycle.id,
+              amount: adjAmount,
+              reason: `Changed after payout: ${formatDDMMYYYY(date)} (${oldStatus || 'Unmarked'} -> ${status})`,
+              type: 'auto_attendance_change',
+              status: 'Open',
+              created_at: now,
+              updated_at: now,
+              deleted_at: null,
+            };
+            newAdjustments = [...newAdjustments, autoAdj];
+          }
+        }
+
+        let updatedAttendance = [...state.attendance];
         if (existingIdx >= 0) {
-          const updated = [...state.attendance];
-          updated[existingIdx] = {
-            ...updated[existingIdx],
+          updatedAttendance[existingIdx] = {
+            ...updatedAttendance[existingIdx],
             status,
             updated_at: now,
           };
-          return { attendance: updated };
         } else {
-          const newRecord: AttendanceRecord = {
+          updatedAttendance.push({
             id: generateUUID(),
             employeeId,
             date,
             status,
             created_at: now,
             updated_at: now,
-          };
-          return { attendance: [...state.attendance, newRecord] };
+          });
         }
+
+        return {
+          attendance: updatedAttendance,
+          salaryAdjustments: newAdjustments,
+        };
       }),
 
       markAllPresent: (date) => set((state) => {
@@ -562,7 +699,8 @@ export const useStore = create<StoreState>()(
         const updatedAttendance = [...state.attendance];
 
         for (const emp of activeEmployees) {
-          const idx = updatedAttendance.findIndex((a) => a.employeeId === emp.id && a.date === date);
+          if (date < emp.joiningDate) continue;
+          const idx = updatedAttendance.findIndex((a) => a.employeeId === emp.id && a.date === date && !a.deleted_at);
           if (idx >= 0) {
             updatedAttendance[idx] = {
               ...updatedAttendance[idx],
@@ -584,19 +722,89 @@ export const useStore = create<StoreState>()(
       }),
 
       addSalaryAdvance: (advance) => set((state) => {
+        const emp = state.employees.find((e) => e.id === advance.employeeId);
         const now = new Date().toISOString();
+        const advAmount = Number(advance.amount);
+
+        // Check if date falls in an already paid cycle
+        let isPaidCycle = false;
+        let paidCycleInfo: any = null;
+        if (emp) {
+          const cycles = generateEmployeeCycles(emp, undefined, state.salaryPayments, state.attendance);
+          paidCycleInfo = cycles.find((c) => c.status === 'Paid' && advance.date >= c.startDate && advance.date <= c.endDate);
+          if (paidCycleInfo) {
+            isPaidCycle = true;
+          }
+        }
+
         const newAdvance: SalaryAdvance = {
           id: generateUUID(),
           employeeId: advance.employeeId,
-          amount: Number(advance.amount),
-          deducted_amount: 0,
+          amount: advAmount,
+          deducted_amount: isPaidCycle ? advAmount : 0,
           date: advance.date,
+          transactionDate: advance.date,
+          status: isPaidCycle ? 'Settled' : 'Open',
           reason: advance.reason || undefined,
           created_at: now,
           updated_at: now,
         };
-        return { salaryAdvances: [...state.salaryAdvances, newAdvance] };
+
+        let newAdjustments = state.salaryAdjustments || [];
+        if (isPaidCycle) {
+          // Late advance: cycle already paid, convert to late adjustment in next open cycle
+          const lateAdj: SalaryAdjustment = {
+            id: generateUUID(),
+            employeeId: advance.employeeId,
+            cycleId: paidCycleInfo?.id,
+            amount: -advAmount, // Negative adjustment to deduct from salary
+            reason: `Advance dated ${formatDDMMYYYY(advance.date)}, cycle already paid`,
+            type: 'late_advance',
+            status: 'Open',
+            created_at: now,
+            updated_at: now,
+            deleted_at: null,
+          };
+          newAdjustments = [...newAdjustments, lateAdj];
+        }
+
+        return {
+          salaryAdvances: [...state.salaryAdvances, newAdvance],
+          salaryAdjustments: newAdjustments,
+        };
       }),
+
+      updateSalaryAdvance: (id, updates) => {
+        const state = get();
+        const adv = state.salaryAdvances.find((a) => a.id === id && !a.deleted_at);
+        if (!adv) return { success: false, error: 'Advance not found' };
+        if (adv.status !== 'Open') {
+          return { success: false, error: 'Cannot modify an advance that has already been settled or belongs to a paid cycle.' };
+        }
+        const now = new Date().toISOString();
+        set({
+          salaryAdvances: state.salaryAdvances.map((a) =>
+            a.id === id ? { ...a, ...updates, updated_at: now } : a
+          ),
+        });
+        return { success: true };
+      },
+
+      deleteSalaryAdvance: (id) => {
+        const state = get();
+        const adv = state.salaryAdvances.find((a) => a.id === id && !a.deleted_at);
+        if (!adv) return { success: false, error: 'Advance not found' };
+        if (adv.status !== 'Open') {
+          return { success: false, error: 'Cannot delete an advance that has already been settled or belongs to a paid cycle.' };
+        }
+        const now = new Date().toISOString();
+        set({
+          salaryAdvances: state.salaryAdvances.map((a) =>
+            a.id === id ? { ...a, deleted_at: now, updated_at: now } : a
+          ),
+        });
+        return { success: true };
+      },
 
       addBorrow: (borrow) => set((state) => {
         const now = new Date().toISOString();
@@ -607,12 +815,326 @@ export const useStore = create<StoreState>()(
           repaid_amount: 0,
           status: 'outstanding',
           date: borrow.date,
+          transactionDate: borrow.date,
           reason: borrow.reason || undefined,
           created_at: now,
           updated_at: now,
         };
         return { borrows: [...state.borrows, newBorrow] };
       }),
+
+      updateBorrow: (id, updates) => {
+        const state = get();
+        const b = state.borrows.find((item) => item.id === id && !item.deleted_at);
+        if (!b) return { success: false, error: 'Borrow record not found' };
+        if (b.status !== 'outstanding') {
+          return { success: false, error: 'Cannot modify a borrow record that has repayments or has been settled.' };
+        }
+        const now = new Date().toISOString();
+        set({
+          borrows: state.borrows.map((item) =>
+            item.id === id ? { ...item, ...updates, updated_at: now } : item
+          ),
+        });
+        return { success: true };
+      },
+
+      deleteBorrow: (id) => {
+        const state = get();
+        const b = state.borrows.find((item) => item.id === id && !item.deleted_at);
+        if (!b) return { success: false, error: 'Borrow record not found' };
+        if (b.status !== 'outstanding') {
+          return { success: false, error: 'Cannot delete a borrow record that has repayments or has been settled.' };
+        }
+        const now = new Date().toISOString();
+        set({
+          borrows: state.borrows.map((item) =>
+            item.id === id ? { ...item, deleted_at: now, updated_at: now } : item
+          ),
+        });
+        return { success: true };
+      },
+
+      addSalaryAdjustment: (adj) => {
+        const now = new Date().toISOString();
+        const newAdj: SalaryAdjustment = {
+          id: generateUUID(),
+          employeeId: adj.employeeId,
+          cycleId: adj.cycleId,
+          amount: Number(adj.amount),
+          reason: adj.reason,
+          type: adj.type || 'manual',
+          status: 'Open',
+          created_at: now,
+          updated_at: now,
+          deleted_at: null,
+        };
+        set((state) => ({
+          salaryAdjustments: [...(state.salaryAdjustments || []), newAdj],
+        }));
+        return newAdj;
+      },
+
+      deleteSalaryAdjustment: (id) => {
+        const state = get();
+        const adj = (state.salaryAdjustments || []).find((a) => a.id === id && !a.deleted_at);
+        if (!adj) return { success: false, error: 'Adjustment not found' };
+        if (adj.status !== 'Open') {
+          return { success: false, error: 'Cannot delete an adjustment that has already been applied.' };
+        }
+        const now = new Date().toISOString();
+        set({
+          salaryAdjustments: (state.salaryAdjustments || []).map((a) =>
+            a.id === id ? { ...a, deleted_at: now, updated_at: now } : a
+          ),
+        });
+        return { success: true };
+      },
+
+      executeCyclePayout: (payout) => {
+        const state = get();
+        const now = new Date().toISOString();
+        const paymentId = generateUUID();
+        const slipNumber = generateSlipNumber(state.salaryPayments || []);
+
+        // 1. Mark advances as Settled
+        const updatedAdvances = (state.salaryAdvances || []).map((adv) => {
+          if (adv.employeeId === payout.employeeId && !adv.deleted_at && adv.status === 'Open') {
+            if (adv.date <= payout.cycleEnd) {
+              return {
+                ...adv,
+                status: 'Settled' as const,
+                payoutId: paymentId,
+                deducted_amount: adv.amount,
+                updated_at: now,
+              };
+            }
+          }
+          return adv;
+        });
+
+        // 2. Apply borrow recoveries
+        const recoveryMap = new Map<string, number>();
+        for (const rec of payout.borrowRecoveries || []) {
+          recoveryMap.set(rec.borrowId, (recoveryMap.get(rec.borrowId) || 0) + Number(rec.amount || 0));
+        }
+
+        const newLedgerItems: SalaryDeductionLedgerItem[] = [];
+        const updatedBorrows = (state.borrows || []).map((b) => {
+          const recAmount = recoveryMap.get(b.id);
+          if (recAmount && recAmount > 0) {
+            const newRepaid = (b.repaid_amount || 0) + recAmount;
+            const newStatus: 'outstanding' | 'partially_repaid' | 'settled' =
+              newRepaid >= b.amount ? 'settled' : 'partially_repaid';
+            newLedgerItems.push({
+              id: generateUUID(),
+              salaryPaymentId: paymentId,
+              targetType: 'borrow',
+              targetId: b.id,
+              amount: recAmount,
+              created_at: now,
+              updated_at: now,
+              deleted_at: null,
+            });
+            return {
+              ...b,
+              repaid_amount: newRepaid,
+              status: newStatus,
+              payoutId: paymentId,
+              updated_at: now,
+            };
+          }
+          return b;
+        });
+
+        // 3. Apply adjustments
+        const appliedAdjIds = new Set((payout.adjustmentsApplied || []).map((a) => a.id));
+        const updatedAdjustments = (state.salaryAdjustments || []).map((adj) => {
+          if (appliedAdjIds.has(adj.id)) {
+            return {
+              ...adj,
+              status: 'Applied' as const,
+              payoutId: paymentId,
+              updated_at: now,
+            };
+          }
+          return adj;
+        });
+
+        // 4. Create immutable SalaryPayment record
+        const newPayment: SalaryPayment = {
+          id: paymentId,
+          employeeId: payout.employeeId,
+          month: payout.cycleStart.slice(0, 7),
+          slipNumber,
+          cycleStart: payout.cycleStart,
+          cycleEnd: payout.cycleEnd,
+          cycleDays: payout.cycleDays,
+          salaryUsed: payout.salaryUsed,
+          perDay: payout.perDay,
+          gross: Number(payout.gross),
+          presentDays: payout.presentDays,
+          absentDays: payout.absentDays,
+          paidLeaveDays: payout.paidLeaveDays,
+          unpaidLeaveDays: payout.unpaidLeaveDays,
+          notMarkedDays: payout.notMarkedDays,
+          deductedDates: payout.deductedDates,
+          attendanceDeduction: Number(payout.attendanceDeduction || 0),
+          earnedAmount: Number(payout.earnedAmount || 0),
+          advance_deducted: Number(payout.advanceDeducted || 0),
+          carriedForwardAdvanceIn: Number(payout.carriedForwardAdvanceIn || 0),
+          carriedForwardAdvanceOut: Number(payout.carriedForwardAdvanceOut || 0),
+          borrow_deducted: Number(payout.borrowDeducted || 0),
+          borrowRecoveries: payout.borrowRecoveries,
+          adjustmentsTotal: Number(payout.adjustmentsTotal || 0),
+          adjustmentsApplied: payout.adjustmentsApplied,
+          net_paid: Number(payout.netPaid),
+          paid_on: payout.paidOn,
+          payment_ref: payout.paymentRef || undefined,
+          note: payout.note || undefined,
+          status: 'Paid',
+          isLegacy: false,
+          isFinalSettlement: !!payout.isFinalSettlement,
+          lastWorkingDate: payout.lastWorkingDate,
+          created_at: now,
+          updated_at: now,
+        };
+
+        // 5. If final settlement, update employee status to inactive
+        let updatedEmployees = state.employees;
+        if (payout.isFinalSettlement) {
+          updatedEmployees = state.employees.map((emp) =>
+            emp.id === payout.employeeId
+              ? {
+                  ...emp,
+                  status: 'inactive' as const,
+                  lastWorkingDate: payout.lastWorkingDate || payout.cycleEnd,
+                  updated_at: now,
+                }
+              : emp
+          );
+        }
+
+        set({
+          employees: updatedEmployees,
+          salaryAdvances: updatedAdvances,
+          borrows: updatedBorrows,
+          salaryAdjustments: updatedAdjustments,
+          salaryPayments: [...(state.salaryPayments || []), newPayment],
+          salaryDeductionLedger: [...(state.salaryDeductionLedger || []), ...newLedgerItems],
+        });
+
+        return { success: true, paymentId, slipNumber };
+      },
+
+      reverseCyclePayout: (paymentId, reason) => {
+        const state = get();
+        // Permission check: reverse requires admin or master role
+        const currentUser = state.currentUser;
+        const userRole = currentUser && typeof currentUser === 'object'
+          ? (state.appRoles || []).find((r) => r.id === currentUser.roleId)
+          : null;
+        const isAdmin = currentUser === 'master' || (userRole && (userRole.name.toLowerCase().includes('admin') || userRole.id === 'role-admin'));
+        if (!isAdmin) {
+          return { success: false, error: 'Only Admin or Master can reverse salary payouts.' };
+        }
+
+        const payment = (state.salaryPayments || []).find((p) => p.id === paymentId && !p.deleted_at);
+        if (!payment) {
+          return { success: false, error: 'Payment not found' };
+        }
+        if (payment.status === 'Reversed') {
+          return { success: false, error: 'Payment has already been reversed.' };
+        }
+
+        const now = new Date().toISOString();
+
+        // 1. Mark payment as Reversed
+        const updatedPayments = (state.salaryPayments || []).map((p) =>
+          p.id === paymentId
+            ? {
+                ...p,
+                status: 'Reversed' as const,
+                reversed_at: now,
+                reversed_reason: reason || 'Reversed by admin',
+                updated_at: now,
+              }
+            : p
+        );
+
+        // 2. Re-open advances settled by this payout
+        const updatedAdvances = (state.salaryAdvances || []).map((adv) => {
+          if (adv.payoutId === paymentId) {
+            return {
+              ...adv,
+              status: 'Open' as const,
+              payoutId: null,
+              deducted_amount: 0,
+              updated_at: now,
+            };
+          }
+          return adv;
+        });
+
+        // 3. Reverse borrow recoveries applied in this payout
+        const recoveryMap = new Map<string, number>();
+        for (const rec of payment.borrowRecoveries || []) {
+          recoveryMap.set(rec.borrowId, (recoveryMap.get(rec.borrowId) || 0) + Number(rec.amount || 0));
+        }
+
+        const updatedBorrows = (state.borrows || []).map((b) => {
+          const recAmount = recoveryMap.get(b.id);
+          if (recAmount && recAmount > 0) {
+            const newRepaid = Math.max(0, (b.repaid_amount || 0) - recAmount);
+            const newStatus: 'outstanding' | 'partially_repaid' | 'settled' =
+              newRepaid >= b.amount ? 'settled' : (newRepaid > 0 ? 'partially_repaid' : 'outstanding');
+            return {
+              ...b,
+              repaid_amount: newRepaid,
+              status: newStatus,
+              payoutId: null,
+              updated_at: now,
+            };
+          }
+          return b;
+        });
+
+        // 4. Re-open adjustments applied in this payout
+        const updatedAdjustments = (state.salaryAdjustments || []).map((adj) => {
+          if (adj.payoutId === paymentId) {
+            return {
+              ...adj,
+              status: 'Open' as const,
+              payoutId: null,
+              updated_at: now,
+            };
+          }
+          return adj;
+        });
+
+        // 5. Mark ledger items as deleted
+        const updatedLedger = (state.salaryDeductionLedger || []).map((l) =>
+          l.salaryPaymentId === paymentId ? { ...l, deleted_at: now, updated_at: now } : l
+        );
+
+        set({
+          salaryPayments: updatedPayments,
+          salaryAdvances: updatedAdvances,
+          borrows: updatedBorrows,
+          salaryAdjustments: updatedAdjustments,
+          salaryDeductionLedger: updatedLedger,
+        });
+
+        return { success: true };
+      },
+
+      finalSettlement: (employeeId, settlementData) => {
+        return get().executeCyclePayout({
+          ...settlementData,
+          employeeId,
+          isFinalSettlement: true,
+        });
+      },
 
       executePayout: (payout) => {
         const state = get();
@@ -1212,6 +1734,7 @@ export const useStore = create<StoreState>()(
         attendance: state.attendance,
         salaryAdvances: state.salaryAdvances,
         borrows: state.borrows,
+        salaryAdjustments: state.salaryAdjustments,
         salaryPayments: state.salaryPayments,
         salaryDeductionLedger: state.salaryDeductionLedger,
         billCounter: state.billCounter,
@@ -1224,6 +1747,13 @@ export const useStore = create<StoreState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
+          // Pre-migration DB auto-backup
+          if (typeof window !== 'undefined' && (window as any).electronAPI?.backup) {
+            (window as any).electronAPI.backup().catch((err: any) =>
+              console.warn('[Backup] Auto-backup before migration warning:', err)
+            );
+          }
+
           if (state.invoiceSettings && (!state.invoiceSettings.ac_to_non_ac_discount_rates || state.invoiceSettings.ac_to_non_ac_discount_rates.length === 0)) {
             state.invoiceSettings.ac_to_non_ac_discount_rates = DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES;
           }
@@ -1246,6 +1776,9 @@ export const useStore = create<StoreState>()(
           }
           if (!state.borrows) {
             state.borrows = [];
+          }
+          if (!state.salaryAdjustments) {
+            state.salaryAdjustments = [];
           }
           if (!state.salaryPayments) {
             state.salaryPayments = [];
@@ -1313,6 +1846,9 @@ export const useStore = create<StoreState>()(
               amount: Number(adv.amount || 0),
               deducted_amount: Number(adv.deducted_amount ?? adv.deductedAmount ?? 0),
               date: adv.date,
+              transactionDate: adv.transactionDate || adv.date,
+              status: adv.status || (Number(adv.deducted_amount ?? adv.deductedAmount ?? 0) >= Number(adv.amount || 0) && Number(adv.amount || 0) > 0 ? 'Settled' : 'Open'),
+              payoutId: adv.payoutId || null,
               reason: adv.reason || undefined,
               created_at: adv.created_at || new Date().toISOString(),
               updated_at: adv.updated_at || new Date().toISOString(),
@@ -1339,6 +1875,8 @@ export const useStore = create<StoreState>()(
                 repaid_amount: repaid,
                 status,
                 date: b.date,
+                transactionDate: b.transactionDate || b.date,
+                payoutId: b.payoutId || null,
                 reason: b.reason || undefined,
                 created_at: b.created_at || new Date().toISOString(),
                 updated_at: b.updated_at || new Date().toISOString(),
@@ -1347,18 +1885,59 @@ export const useStore = create<StoreState>()(
             });
           }
 
+          if (Array.isArray(state.salaryAdjustments)) {
+            state.salaryAdjustments = state.salaryAdjustments.map((adj: any) => ({
+              id: adj.id || generateUUID(),
+              employeeId: adj.employeeId || adj.employee_id,
+              cycleId: adj.cycleId || adj.cycle_id,
+              amount: Number(adj.amount || 0),
+              reason: adj.reason || '',
+              type: adj.type || 'manual',
+              status: adj.status || 'Open',
+              payoutId: adj.payoutId || null,
+              created_at: adj.created_at || new Date().toISOString(),
+              updated_at: adj.updated_at || new Date().toISOString(),
+              deleted_at: adj.deleted_at || null,
+            }));
+          }
+
           if (Array.isArray(state.salaryPayments)) {
             state.salaryPayments = state.salaryPayments.map((p: any) => ({
               id: p.id || generateUUID(),
               employeeId: p.employeeId || p.employee_id,
               month: p.month,
+              slipNumber: p.slipNumber,
+              cycleStart: p.cycleStart,
+              cycleEnd: p.cycleEnd,
+              cycleDays: p.cycleDays,
+              salaryUsed: p.salaryUsed,
+              perDay: p.perDay,
               gross: Number(p.gross || 0),
+              presentDays: p.presentDays,
+              absentDays: p.absentDays,
+              paidLeaveDays: p.paidLeaveDays,
+              unpaidLeaveDays: p.unpaidLeaveDays,
+              notMarkedDays: p.notMarkedDays,
+              deductedDates: p.deductedDates,
+              attendanceDeduction: p.attendanceDeduction,
+              earnedAmount: p.earnedAmount,
               advance_deducted: Number(p.advance_deducted ?? p.advanceDeducted ?? 0),
+              carriedForwardAdvanceIn: p.carriedForwardAdvanceIn,
+              carriedForwardAdvanceOut: p.carriedForwardAdvanceOut,
               borrow_deducted: Number(p.borrow_deducted ?? p.borrowDeducted ?? 0),
+              borrowRecoveries: p.borrowRecoveries,
+              adjustmentsTotal: p.adjustmentsTotal,
+              adjustmentsApplied: p.adjustmentsApplied,
               net_paid: Number(p.net_paid ?? p.netPaid ?? 0),
               paid_on: p.paid_on || p.paidOn,
               payment_ref: p.payment_ref || p.paymentRef || undefined,
               note: p.note || undefined,
+              status: p.status || 'Paid',
+              reversed_at: p.reversed_at || null,
+              reversed_reason: p.reversed_reason || null,
+              isLegacy: p.isLegacy ?? (!p.cycleStart),
+              isFinalSettlement: p.isFinalSettlement ?? false,
+              lastWorkingDate: p.lastWorkingDate,
               created_at: p.created_at || new Date().toISOString(),
               updated_at: p.updated_at || new Date().toISOString(),
               deleted_at: p.deleted_at || null,

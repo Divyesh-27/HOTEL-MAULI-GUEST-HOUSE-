@@ -1,7 +1,7 @@
 {
   "name": "lodge-manager-desktop",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "main": "electron/main.cjs",
   "type": "module",
   "description": "Hotel Mauli Guest House - Management Software",
@@ -51,7 +51,8 @@
     "publish": {
       "provider": "github",
       "owner": "Divyesh-27",
-      "repo": "HOTEL-MAULI-GUEST-HOUSE-"
+      "repo": "HOTEL-MAULI-GUEST-HOUSE-",
+      "releaseType": "release"
     }
   },
   "dependencies": {

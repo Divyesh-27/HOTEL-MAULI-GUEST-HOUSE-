@@ -122,6 +122,7 @@ export interface Employee {
   phone?: string;
   address?: string;
   aadhaarLast4?: string; // Only last 4 digits stored in JSON
+  lastWorkingDate?: string; // YYYY-MM-DD for inactive employees
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -131,7 +132,7 @@ export interface AttendanceRecord {
   id: string; // UUID
   employeeId: string;
   date: string; // YYYY-MM-DD
-  status: 'Present' | 'Absent';
+  status: 'Present' | 'Absent' | 'Paid Leave' | 'Unpaid Leave';
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -142,7 +143,10 @@ export interface SalaryAdvance {
   employeeId: string;
   amount: number;
   deducted_amount: number; // Tracker for how much has been deducted
-  date: string; // YYYY-MM-DD
+  date: string; // YYYY-MM-DD (legacy / display)
+  transactionDate?: string; // YYYY-MM-DD (decides the cycle)
+  status?: 'Open' | 'Settled' | 'Voided';
+  payoutId?: string | null;
   reason?: string;
   created_at: string;
   updated_at: string;
@@ -154,9 +158,25 @@ export interface BorrowRecord {
   employeeId: string;
   amount: number;
   repaid_amount: number; // Tracker for how much has been repaid
-  status: 'outstanding' | 'partially_repaid' | 'settled';
-  date: string; // YYYY-MM-DD
+  status: 'outstanding' | 'partially_repaid' | 'settled' | 'Voided';
+  date: string; // YYYY-MM-DD (legacy / display)
+  transactionDate?: string; // YYYY-MM-DD (decides the cycle)
+  payoutId?: string | null;
   reason?: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface SalaryAdjustment {
+  id: string; // UUID
+  employeeId: string;
+  cycleId?: string;
+  amount: number; // Signed (+ or - in rupees)
+  reason: string;
+  type: 'manual' | 'auto_attendance_change' | 'late_advance';
+  status: 'Open' | 'Applied' | 'Voided';
+  payoutId?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -165,14 +185,39 @@ export interface BorrowRecord {
 export interface SalaryPayment {
   id: string; // UUID
   employeeId: string;
-  month: string; // YYYY-MM
+  month: string; // YYYY-MM (legacy compatibility)
+  slipNumber?: string; // e.g. SLIP-2026-0001
+  cycleStart?: string; // YYYY-MM-DD
+  cycleEnd?: string;   // YYYY-MM-DD
+  cycleDays?: number;
+  salaryUsed?: number;
+  perDay?: number;
   gross: number; // Monthly gross salary
+  presentDays?: number;
+  absentDays?: number;
+  paidLeaveDays?: number;
+  unpaidLeaveDays?: number;
+  notMarkedDays?: number;
+  deductedDates?: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+  attendanceDeduction?: number;
+  earnedAmount?: number;
   advance_deducted: number;
+  carriedForwardAdvanceIn?: number;
+  carriedForwardAdvanceOut?: number;
   borrow_deducted: number;
+  borrowRecoveries?: Array<{ borrowId: string; amount: number; reason?: string }>;
+  adjustmentsTotal?: number;
+  adjustmentsApplied?: Array<{ id: string; amount: number; reason: string }>;
   net_paid: number;
   paid_on: string; // YYYY-MM-DD
   payment_ref?: string; // Check / UPI / Cash reference note
   note?: string;
+  status?: 'Paid' | 'Reversed';
+  reversed_at?: string | null;
+  reversed_reason?: string | null;
+  isLegacy?: boolean;
+  isFinalSettlement?: boolean;
+  lastWorkingDate?: string;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -249,6 +294,10 @@ export interface InvoiceSettings {
   show_gstin_final: boolean;
   show_breakup_advance: boolean;
   show_breakup_final: boolean;
+
+  hotel_name?: string;
+  hotel_address?: string;
+  hotel_phone?: string;
 
   custom_bed_types?: string[];
   custom_categories?: string[];
