@@ -13,13 +13,15 @@ import { toLocalDateTimeString } from '@/utils/dateUtils';
 
 import { useShallow } from 'zustand/react/shallow';
 import { NumberInput } from '@/components/ui/number-input';
+import { getActiveRateMode, getRoomRateForMode } from '@/utils/rateModeUtils';
 
 const DEVICE_ID = 'desktop-main';
 
 const Registration = () => {
   const { 
     rooms, bookings, roomStatus, addBooking, setSection, getNextBillNumber, isDeveloperMode,
-    prefilledRegistration, setPrefilledRegistration, invoiceSettings, roomHolds
+    prefilledRegistration, setPrefilledRegistration, invoiceSettings, roomHolds,
+    rateModes, activeRateModeId, roomModeRates
   } = useStore(useShallow(state => ({
     rooms: state.rooms,
     bookings: state.bookings,
@@ -31,8 +33,16 @@ const Registration = () => {
     prefilledRegistration: state.prefilledRegistration,
     setPrefilledRegistration: state.setPrefilledRegistration,
     invoiceSettings: state.invoiceSettings,
-    roomHolds: state.roomHolds
+    roomHolds: state.roomHolds,
+    rateModes: state.rateModes,
+    activeRateModeId: state.activeRateModeId,
+    roomModeRates: state.roomModeRates
   })));
+
+  // Season / rate mode: new bookings are charged the active mode's rate.
+  const activeRateMode = getActiveRateMode({ rooms, rateModes, activeRateModeId });
+  const rateOf = (roomNo: string) =>
+    getRoomRateForMode(rooms.find(r => r.roomNo === roomNo), activeRateMode.id, roomModeRates);
   const sigPadRef = useRef<any>(null);
   
   const [formData, setFormData] = useState({
@@ -169,10 +179,7 @@ const Registration = () => {
   }, [selectedRooms]);
 
   const getTotalRate = () => {
-    return selectedRooms.reduce((sum, rNo) => {
-      const room = rooms.find(r => r.roomNo === rNo);
-      return sum + (room?.rent || 0);
-    }, 0);
+    return selectedRooms.reduce((sum, rNo) => sum + rateOf(rNo), 0);
   };
 
   const handleClearSignature = () => {
@@ -821,7 +828,12 @@ const Registration = () => {
 
             {/* Room Selection */}
             <div>
-              <label className="block text-sm mb-2 font-bold text-foreground">Select Room(s) *</label>
+              <label className="flex items-center justify-between text-sm mb-2 font-bold text-foreground">
+                <span>Select Room(s) *</span>
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/20" title="Rates shown are for the active rate mode. Change it in Admin → Season Rates.">
+                  Rate Mode: {activeRateMode.name}
+                </span>
+              </label>
               <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-3 border rounded bg-secondary/30">
                 {availableRooms.map((room) => {
                   const held = isRoomHeld(room.roomNo);
@@ -849,7 +861,7 @@ const Registration = () => {
                       className="hidden"
                     />
                     <span className="font-bold text-sm">{room.roomNo}</span>
-                    <span className="text-[10px] text-muted-foreground">₹{room.rent}</span>
+                    <span className="text-[10px] text-muted-foreground">₹{rateOf(room.roomNo)}</span>
                   </div>
                 )})}
               </div>
@@ -934,8 +946,7 @@ const Registration = () => {
                     let missingRent: number | null = null;
 
                     for (const rNo of selectedRooms) {
-                      const r = rooms.find(room => room.roomNo === rNo);
-                      const rRent = r?.rent || 0;
+                      const rRent = rateOf(rNo);
                       const match = discountRates.find(rate => rate.rent === rRent);
                       if (!match) {
                         missingRent = rRent;

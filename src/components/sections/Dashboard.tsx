@@ -8,6 +8,7 @@ import { deleteRoomStatusFromCloud, pushBookingToCloud } from '@/lib/syncActions
 import { normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 
 import { useShallow } from 'zustand/react/shallow';
+import { getActiveRateMode, getRoomRateForMode } from '@/utils/rateModeUtils';
 
 type FilterType = 'all' | 'occupied' | 'available' | 'reserved' | 'cleaning' | 'maintenance';
 
@@ -15,15 +16,20 @@ const Dashboard = () => {
   const { 
     rooms, bookings, roomStatus, currentFilter, setFilter, setSection, 
     markCleaned, getRoomStatus, getOccupiedRooms, getReservedRooms, 
-    getAvailableRooms, convertReservationToCheckIn, updateBooking 
+    getAvailableRooms, convertReservationToCheckIn, updateBooking,
+    rateModes, activeRateModeId, roomModeRates
   } = useStore(useShallow(state => ({
     rooms: state.rooms, bookings: state.bookings, roomStatus: state.roomStatus, 
     currentFilter: state.currentFilter, setFilter: state.setFilter, setSection: state.setSection, 
     markCleaned: state.markCleaned, getRoomStatus: state.getRoomStatus, 
     getOccupiedRooms: state.getOccupiedRooms, getReservedRooms: state.getReservedRooms, 
     getAvailableRooms: state.getAvailableRooms, convertReservationToCheckIn: state.convertReservationToCheckIn, 
-    updateBooking: state.updateBooking
+    updateBooking: state.updateBooking,
+    rateModes: state.rateModes, activeRateModeId: state.activeRateModeId, roomModeRates: state.roomModeRates
   })));
+
+  // Season / rate mode currently used for new bookings
+  const activeRateMode = getActiveRateMode({ rooms, rateModes, activeRateModeId });
 
   // Local state for the modal
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
@@ -133,6 +139,12 @@ const Dashboard = () => {
           <h3 className="font-bold text-foreground">
             Room Status 
             <span className="text-xs font-normal text-muted-foreground ml-2">{getFilterLabel()}</span>
+            <span
+              className="ml-3 px-2 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/20 align-middle"
+              title="Room rates shown are for the active rate mode. Change it in Admin → Season Rates."
+            >
+              Rate Mode: {activeRateMode.name}
+            </span>
           </h3>
           <button 
             onClick={() => setFilter('all')}
@@ -207,7 +219,9 @@ const Dashboard = () => {
                         <p className="text-[10px] text-muted-foreground truncate w-full">
                           {booking ? booking.guestName : status === 'maintenance' ? 'Maintenance' : status === 'cleaning' ? 'Cleaning Required' : 'Available'}
                         </p>
-                        <p className="text-[10px] text-muted mt-1">{room.bedType}</p>
+                        <p className="text-[10px] text-muted mt-1">
+                          {room.bedType} · ₹{getRoomRateForMode(room, activeRateMode.id, roomModeRates)}
+                        </p>
                         {booking?.isReservation && (
                           <span className="text-[9px] bg-status-reserved text-white px-1 rounded mt-1">RESERVED</span>
                         )}

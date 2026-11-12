@@ -10,6 +10,7 @@ import { APP_VERSION } from '@/constants/version';
 
 import { useShallow } from 'zustand/react/shallow';
 import { NumberInput } from '@/components/ui/number-input';
+import { AdminRateModesTab } from './AdminRateModesTab';
 
 const Admin = () => {
   const { 
@@ -100,8 +101,8 @@ const Admin = () => {
     setEditModalOpen(false);
   };
   
-  // Tab navigation inside Admin: 'rooms' | 'settings' | 'dev' | 'users'
-  const [activeTab, setActiveTab] = useState<'rooms' | 'settings' | 'dev' | 'users'>('rooms');
+  // Tab navigation inside Admin: 'rooms' | 'rates' | 'settings' | 'dev' | 'users'
+  const [activeTab, setActiveTab] = useState<'rooms' | 'rates' | 'settings' | 'dev' | 'users'>('rooms');
 
   // Room Management State
   const [newRoom, setNewRoom] = useState({
@@ -329,6 +330,17 @@ const Admin = () => {
           )}
         >
           <Building2 className="w-4 h-4" /> Room Management
+        </button>
+        <button
+          onClick={() => setActiveTab('rates')}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-sm transition-all whitespace-nowrap",
+            activeTab === 'rates'
+              ? "bg-primary text-primary-foreground shadow-md"
+              : "bg-secondary text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <Tag className="w-4 h-4" /> Season Rates
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -1115,6 +1127,9 @@ const Admin = () => {
           </div>
         </div>
       )}
+
+      {/* --- TAB: SEASON RATE MODES --- */}
+      {activeTab === 'rates' && <AdminRateModesTab />}
 
       {/* --- TAB 4: USERS & ROLES --- */}
       {activeTab === 'users' && (

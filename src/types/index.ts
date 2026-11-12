@@ -13,6 +13,29 @@ export interface Room {
   source?: 'desktop' | 'mobile' | string;
 }
 
+// ============================================================
+// SEASON / RATE MODES
+// ============================================================
+// `Room.rent` is always the Normal-mode rate. Rates for other modes live in
+// the store (`roomModeRates`), and each booking keeps a snapshot of the rates
+// it was created with (`bookingRateSnapshots`) so later mode or rate changes
+// never alter existing bookings, bills, history or revenue.
+export interface RateMode {
+  id: string;
+  name: string;
+}
+
+/** modeId -> roomNo -> per-night rate. A missing entry means "use the Normal rate". */
+export type RoomModeRates = Record<string, Record<string, number>>;
+
+export interface BookingRateSnapshot {
+  modeId: string;
+  modeName: string;
+  /** roomNo -> per-night rate locked in when the booking was created */
+  rates: Record<string, number>;
+  created_at: string;
+}
+
 export type RoomStatusType = 'available' | 'occupied' | 'reserved' | 'cleaning' | 'maintenance';
 
 export interface ExtraCharge {

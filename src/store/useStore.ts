@@ -5,8 +5,12 @@ import {
   InvoiceSettings, DEFAULT_INVOICE_SETTINGS, AppUser, AppRole, 
   DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, RoomHold,
   StaffRole, Shift, Employee, AttendanceRecord, SalaryAdvance, BorrowRecord, SalaryPayment,
-  SalaryDeductionLedgerItem, SalaryAdjustment
+  SalaryDeductionLedgerItem, SalaryAdjustment,
+  RateMode, RoomModeRates, BookingRateSnapshot
 } from '@/types';
+import {
+  NORMAL_RATE_MODE_ID, DEFAULT_RATE_MODES, getActiveRateMode, buildRateSnapshot
+} from '@/utils/rateModeUtils';
 import { generateUUID } from '@/lib/uuid';
 import { getRoomStatusOnDate, normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 import { toLocalDateString } from '@/utils/dateUtils';
@@ -128,6 +132,12 @@ interface StoreState {
   customBedTypes: string[];
   customCategories: string[];
   roomHolds: RoomHold[];
+
+  // Season / rate modes (Room.rent is the Normal rate)
+  rateModes: RateMode[];
+  activeRateModeId: string;
+  roomModeRates: RoomModeRates;
+  bookingRateSnapshots: Record<string, BookingRateSnapshot>;
   appUsers: AppUser[];
   appRoles: AppRole[];
   
@@ -269,6 +279,12 @@ interface StoreState {
   updateRoom: (roomNo: string, updatedRoom: Room) => void;
   removeRoom: (index: number) => void;
   removeRoomByNo: (roomNo: string) => void;
+  addRateMode: (name: string) => { success: boolean; error?: string; id?: string };
+  renameRateMode: (id: string, name: string) => { success: boolean; error?: string };
+  deleteRateMode: (id: string) => { success: boolean; error?: string };
+  setActiveRateMode: (id: string) => void;
+  /** Set (number) or clear (null = inherit Normal) rates of one non-Normal mode. */
+  setRoomModeRates: (modeId: string, rates: Record<string, number | null>) => void;
   addCustomBedType: (type: string) => void;
   removeCustomBedType: (type: string) => void;
   addCustomCategory: (category: string) => void;
@@ -320,6 +336,10 @@ export const useStore = create<StoreState>()(
 
       // Initial Data
       rooms: defaultRooms,
+      rateModes: DEFAULT_RATE_MODES,
+      activeRateModeId: NORMAL_RATE_MODE_ID,
+      roomModeRates: {},
+      bookingRateSnapshots: {},
       bookings: [],
       history: [],
       roomStatus: {},
@@ -381,7 +401,16 @@ export const useStore = create<StoreState>()(
           version: (booking.version || 0) + 1,
         };
         pushBookingToCloud(stamped);
-        return { bookings: [...state.bookings, stamped] };
+
+        // Lock in the per-night rates this booking is created with. Kept in a
+        // separate local map (not on the booking) so sync echoes can't drop it
+        // and later mode/rate changes never alter this booking's bill.
+        const snapshots = state.bookingRateSnapshots || {};
+        const bookingRateSnapshots = snapshots[stamped.id]
+          ? snapshots
+          : { ...snapshots, [stamped.id]: buildRateSnapshot(stamped.roomNos, getActiveRateMode(state), state) };
+
+        return { bookings: [...state.bookings, stamped], bookingRateSnapshots };
       }),
 
       updateBooking: (updatedBooking) => set((state) => {
@@ -1404,10 +1433,28 @@ export const useStore = create<StoreState>()(
           delete updatedRoomStatus[roomNo];
         }
 
+        let roomModeRates = state.roomModeRates || {};
+        let bookingRateSnapshots = state.bookingRateSnapshots || {};
+        if (roomNo !== updatedRoom.roomNo) {
+          const renameKey = <T,>(map: Record<string, T>): Record<string, T> => {
+            if (!(roomNo in map)) return map;
+            const { [roomNo]: value, ...rest } = map;
+            return { ...rest, [updatedRoom.roomNo]: value };
+          };
+          roomModeRates = Object.fromEntries(
+            Object.entries(roomModeRates).map(([modeId, rates]) => [modeId, renameKey(rates)])
+          );
+          bookingRateSnapshots = Object.fromEntries(
+            Object.entries(bookingRateSnapshots).map(([id, snap]) => [id, { ...snap, rates: renameKey(snap.rates || {}) }])
+          );
+        }
+
         return {
           rooms: state.rooms.map((r) => r.roomNo === roomNo ? updatedRoom : r),
           bookings: updatedBookings,
           roomStatus: updatedRoomStatus,
+          roomModeRates,
+          bookingRateSnapshots,
         };
       }),
       
@@ -1420,6 +1467,61 @@ export const useStore = create<StoreState>()(
       removeRoomByNo: (roomNo) => set((state) => {
         deleteRoomFromCloud(roomNo);
         return { rooms: state.rooms.filter((r) => r.roomNo !== roomNo) };
+      }),
+
+      // --- Season / rate modes ---
+      addRateMode: (name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return { success: false, error: 'Mode name cannot be empty.' };
+        const modes = get().rateModes || DEFAULT_RATE_MODES;
+        if (modes.some((m) => m.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+          return { success: false, error: `A mode named "${trimmed}" already exists.` };
+        }
+        const id = `mode-${generateUUID()}`;
+        set({ rateModes: [...modes, { id, name: trimmed }] });
+        return { success: true, id };
+      },
+
+      renameRateMode: (id, name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return { success: false, error: 'Mode name cannot be empty.' };
+        const modes = get().rateModes || DEFAULT_RATE_MODES;
+        if (modes.some((m) => m.id !== id && m.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+          return { success: false, error: `A mode named "${trimmed}" already exists.` };
+        }
+        // Existing bookings keep the mode name they were created under.
+        set({ rateModes: modes.map((m) => (m.id === id ? { ...m, name: trimmed } : m)) });
+        return { success: true };
+      },
+
+      deleteRateMode: (id) => {
+        if (id === NORMAL_RATE_MODE_ID) return { success: false, error: 'The Normal mode cannot be deleted.' };
+        const state = get();
+        if (state.activeRateModeId === id) {
+          return { success: false, error: 'This mode is active. Switch to another mode before deleting it.' };
+        }
+        const { [id]: _removed, ...remainingRates } = state.roomModeRates || {};
+        // Booking snapshots are untouched: they hold their own rates and mode name.
+        set({
+          rateModes: (state.rateModes || DEFAULT_RATE_MODES).filter((m) => m.id !== id),
+          roomModeRates: remainingRates,
+        });
+        return { success: true };
+      },
+
+      setActiveRateMode: (id) => set((state) => {
+        const exists = (state.rateModes || DEFAULT_RATE_MODES).some((m) => m.id === id);
+        return exists ? { activeRateModeId: id } : state;
+      }),
+
+      setRoomModeRates: (modeId, rates) => set((state) => {
+        if (modeId === NORMAL_RATE_MODE_ID) return state; // Normal rates are Room.rent (use updateRoom)
+        const next = { ...((state.roomModeRates || {})[modeId] || {}) };
+        for (const [roomNo, rate] of Object.entries(rates)) {
+          if (rate === null || !Number.isFinite(rate) || rate <= 0) delete next[roomNo];
+          else next[roomNo] = rate;
+        }
+        return { roomModeRates: { ...(state.roomModeRates || {}), [modeId]: next } };
       }),
 
       addCustomBedType: (type) => set((state) => {
@@ -1723,6 +1825,10 @@ export const useStore = create<StoreState>()(
         isDeveloperMode: state.isDeveloperMode,
         lastLoginTime: state.lastLoginTime,
         rooms: state.rooms,
+        rateModes: state.rateModes,
+        activeRateModeId: state.activeRateModeId,
+        roomModeRates: state.roomModeRates,
+        bookingRateSnapshots: state.bookingRateSnapshots,
         bookings: state.bookings,
         history: state.history,
         roomStatus: state.roomStatus,
@@ -1756,6 +1862,34 @@ export const useStore = create<StoreState>()(
 
           if (state.invoiceSettings && (!state.invoiceSettings.ac_to_non_ac_discount_rates || state.invoiceSettings.ac_to_non_ac_discount_rates.length === 0)) {
             state.invoiceSettings.ac_to_non_ac_discount_rates = DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES;
+          }
+
+          // --- Season / rate modes (additive migration, no data is changed) ---
+          // Existing Room.rent values ARE the Normal rates; other modes start
+          // with no rates of their own and inherit Normal until edited.
+          if (!Array.isArray(state.rateModes) || state.rateModes.length === 0) {
+            state.rateModes = DEFAULT_RATE_MODES;
+          }
+          if (!state.rateModes.some((m) => m.id === NORMAL_RATE_MODE_ID)) {
+            state.rateModes = [DEFAULT_RATE_MODES[0], ...state.rateModes];
+          }
+          if (!state.roomModeRates) state.roomModeRates = {};
+          if (!state.rateModes.some((m) => m.id === state.activeRateModeId)) {
+            state.activeRateModeId = NORMAL_RATE_MODE_ID;
+          }
+          // Bookings/history created before this feature (or received from the
+          // cloud) have no locked rates: freeze them at the current Normal rate
+          // so later rate or mode changes can't alter their bills.
+          {
+            const snapshots = { ...(state.bookingRateSnapshots || {}) };
+            const normalMode = state.rateModes.find((m) => m.id === NORMAL_RATE_MODE_ID) || DEFAULT_RATE_MODES[0];
+            const freezeState = { rooms: state.rooms || [], roomModeRates: {} };
+            for (const record of [...(state.bookings || []), ...(state.history || [])]) {
+              if (record?.id && !snapshots[record.id]) {
+                snapshots[record.id] = buildRateSnapshot(record.roomNos || [], normalMode, freezeState);
+              }
+            }
+            state.bookingRateSnapshots = snapshots;
           }
 
           // Ensure modern staff collections exist

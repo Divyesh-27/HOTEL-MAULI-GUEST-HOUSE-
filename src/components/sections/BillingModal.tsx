@@ -10,6 +10,7 @@ import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '@/utils/dateUtils';
 
 import { useShallow } from 'zustand/react/shallow';
 import { NumberInput } from '@/components/ui/number-input';
+import { getBookingDailyRate } from '@/utils/rateModeUtils';
 
 interface BillingModalProps {
   booking: Booking | HistoryRecord;
@@ -18,8 +19,8 @@ interface BillingModalProps {
 }
 
 const BillingModal = ({ booking, onClose, mode = 'checkout' }: BillingModalProps) => {
-  const { rooms, removeBooking, addHistory, setRoomStatus, setSection, addAdvancePayment, invoiceSettings } = useStore(useShallow(state => ({
-    rooms: state.rooms, removeBooking: state.removeBooking, addHistory: state.addHistory, setRoomStatus: state.setRoomStatus, setSection: state.setSection, addAdvancePayment: state.addAdvancePayment, invoiceSettings: state.invoiceSettings
+  const { rooms, bookingRateSnapshots, removeBooking, addHistory, setRoomStatus, setSection, addAdvancePayment, invoiceSettings } = useStore(useShallow(state => ({
+    rooms: state.rooms, bookingRateSnapshots: state.bookingRateSnapshots, removeBooking: state.removeBooking, addHistory: state.addHistory, setRoomStatus: state.setRoomStatus, setSection: state.setSection, addAdvancePayment: state.addAdvancePayment, invoiceSettings: state.invoiceSettings
   })));
 
   // Handle Escape key to close modal
@@ -80,11 +81,9 @@ const BillingModal = ({ booking, onClose, mode = 'checkout' }: BillingModalProps
   };
 
   // --- CALCULATION LOGIC ---
-  let dailyRent = 0;
-  booking.roomNos.forEach((rNo) => {
-    const room = rooms.find((r) => r.roomNo === rNo);
-    if (room) dailyRent += room.rent;
-  });
+  // Uses the per-night rates locked in when the booking was created, so later
+  // rate or season-mode changes never alter this bill.
+  const dailyRent = getBookingDailyRate(booking.id, booking.roomNos, { rooms, bookingRateSnapshots });
   
   const originalRoomTotal = dailyRent * days;
   const netRoomTotal = Math.max(0, originalRoomTotal - booking.discount);

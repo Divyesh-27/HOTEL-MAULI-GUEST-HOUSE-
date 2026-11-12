@@ -3,6 +3,7 @@ import html2canvas from 'html2canvas';
 import mauliLogo from '@/assets/mauli-logo.png';
 import { getHotelGSTIN, calculateAccommodationGST } from '@/utils/gstUtils';
 import { useStore } from '@/store/useStore';
+import { getBookingDailyRate } from '@/utils/rateModeUtils';
 import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '@/utils/dateUtils';
 
 export const downloadInvoicePDF = async (elementOrId: string | HTMLElement, filename: string) => {
@@ -65,17 +66,15 @@ export const generateRecordInvoiceHTML = (record: any): string => {
   const totalAmount = record.finalAmount || record.totalPaid || 0;
   const remaining = Math.max(0, totalAmount - totalAdvancePaid);
 
-  let roomsList: any[] = [];
+  // Per-night rate locked in when the booking was created (falls back to the
+  // room's Normal rate for records without a snapshot).
+  let dailyRoomRate = 0;
   try {
-    roomsList = useStore.getState().rooms || [];
+    const { rooms, bookingRateSnapshots } = useStore.getState();
+    dailyRoomRate = getBookingDailyRate(record.id, record.roomNos || [], { rooms: rooms || [], bookingRateSnapshots });
   } catch {
-    roomsList = [];
+    dailyRoomRate = 0;
   }
-
-  const dailyRoomRate = (record.roomNos || []).reduce((sum: number, rNo: string) => {
-    const roomObj = roomsList.find((r: any) => r.roomNo === rNo);
-    return sum + (roomObj?.rent || 0);
-  }, 0);
 
   const days = record.days || 1;
   const originalRoomTotal = dailyRoomRate * days;
