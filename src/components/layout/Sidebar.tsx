@@ -4,6 +4,7 @@ import {
   UserPlus, 
   FileText, 
   Calendar, 
+  LayoutGrid,
   History, 
   Settings, 
   Users,
@@ -21,6 +22,7 @@ const navItems: { id: SectionType; label: string; icon: typeof LayoutDashboard; 
   { id: 'registration', label: 'New Registration', icon: UserPlus },
   { id: 'billing', label: 'Billing', icon: FileText },
   { id: 'calendar', label: 'Calendar', icon: Calendar },
+  { id: 'room-cards', label: 'Room Cards', icon: LayoutGrid },
   { id: 'history', label: 'History', icon: History },
   { id: 'revenue', label: 'Revenue', icon: IndianRupee },
 ];

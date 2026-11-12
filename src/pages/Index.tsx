@@ -6,6 +6,7 @@ import Dashboard from '@/components/sections/Dashboard';
 import Registration from '@/components/sections/Registration';
 import Billing from '@/components/sections/Billing';
 import Calendar from '@/components/sections/Calendar';
+import RoomCards from '@/components/sections/RoomCards';
 import History from '@/components/sections/History';
 import Revenue from '@/components/sections/Revenue';
 import Admin from '@/components/sections/Admin';
@@ -61,6 +62,8 @@ const Index = () => {
         return <Billing />;
       case 'calendar':
         return <Calendar />;
+      case 'room-cards':
+        return <RoomCards />;
       case 'history':
         return <History />;
       case 'revenue':
