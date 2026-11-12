@@ -13,6 +13,7 @@ interface GuestDetailsModalProps {
 }
 
 import { toLocalDateTimeString } from '@/utils/dateUtils';
+import { NumberInput } from '@/components/ui/number-input';
 export { toLocalDateTimeString };
 
 const getNormalizedFormData = (data: Booking | HistoryRecord) => {
@@ -68,6 +69,13 @@ const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false }:
   const [validationError, setValidationError] = useState<string | null>(null);
   
   const [formData, setFormData] = useState(() => getNormalizedFormData(data));
+
+  // Update stay length and keep the stored checkout date in step with it.
+  const applyStayDays = (val: number) => {
+    const inTime = new Date(formData.checkIn).getTime();
+    const newOut = new Date(inTime + val * 24 * 60 * 60 * 1000).toISOString();
+    setFormData(prev => ({ ...prev, days: val, checkoutDate: (prev as any).checkoutDate ? newOut : undefined }));
+  };
 
   const setSection = useStore(state => state.setSection);
   const setPrefilledRegistration = useStore(state => state.setPrefilledRegistration);
@@ -419,16 +427,11 @@ const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false }:
                   <div>
                     <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">Stay Duration (Days)</label>
                     {isEditing ? (
-                      <input 
-                        type="number" 
+                      <NumberInput
                         min="1"
-                        value={formData.days || 1} 
-                        onChange={(e) => {
-                          const val = Math.max(1, parseInt(e.target.value) || 1);
-                          const inTime = new Date(formData.checkIn).getTime();
-                          const newOut = new Date(inTime + val * 24 * 60 * 60 * 1000).toISOString();
-                          setFormData(prev => ({ ...prev, days: val, checkoutDate: (prev as any).checkoutDate ? newOut : undefined }));
-                        }}
+                        value={formData.days}
+                        onValueChange={(val) => applyStayDays(val)}
+                        onBlur={() => applyStayDays(Math.max(1, Math.floor(formData.days ?? 0) || 1))}
                         className="w-full text-sm font-mono font-medium p-3 bg-background border border-primary/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary shadow-sm"
                       />
                     ) : (

@@ -12,6 +12,7 @@ import { createRoomHold, releaseRoomHold } from '@/lib/supabaseBridge';
 import { toLocalDateTimeString } from '@/utils/dateUtils';
 
 import { useShallow } from 'zustand/react/shallow';
+import { NumberInput } from '@/components/ui/number-input';
 
 const DEVICE_ID = 'desktop-main';
 
@@ -807,12 +808,12 @@ const Registration = () => {
               </div>
               <div>
                 <label className="block text-sm mb-1 font-bold text-foreground">Days</label>
-                <input
+                <NumberInput
                   id="reg-field-days"
-                  type="number"
                   min="1"
                   value={formData.days}
-                  onChange={(e) => setFormData({ ...formData, days: parseInt(e.target.value) || 1 })}
+                  onValueChange={(v) => setFormData(prev => ({ ...prev, days: v }))}
+                  onBlur={() => setFormData(prev => ({ ...prev, days: Math.max(1, Math.floor(prev.days) || 1) }))}
                   className="w-full h-10 px-3 rounded text-sm border"
                 />
               </div>
@@ -877,11 +878,12 @@ const Registration = () => {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <div>
               <label className="block text-sm mb-1 font-bold text-foreground">Advance Paid (₹)</label>
-              <input
+              <NumberInput
                 id="reg-field-advance"
-                type="number"
+ 
                 value={formData.advance}
-                onChange={(e) => setFormData({ ...formData, advance: parseFloat(e.target.value) || 0 })}
+                step="any"
+                onValueChange={(v) => setFormData({ ...formData, advance: v })}
                 className="w-full h-10 px-3 rounded text-sm font-bold border"
               />
             </div>
@@ -964,11 +966,12 @@ const Registration = () => {
                   ⚡ Convert AC to Non-AC
                 </button>
               </div>
-              <input
+              <NumberInput
                 id="reg-field-discount"
-                type="number"
+ 
                 value={formData.discount || ''}
-                onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })}
+                step="any"
+                onValueChange={(v) => setFormData({ ...formData, discount: v })}
                 className="w-full h-9 px-3 rounded text-sm font-bold text-destructive border border-red-200"
                 placeholder="0"
               />
@@ -1036,11 +1039,11 @@ const Registration = () => {
                     className="w-1/3 h-10 px-3 rounded text-sm border bg-background"
                   />
                 )}
-                <input
-                  type="number"
+                <NumberInput
                   placeholder="₹ Amt"
                   value={formData.extraAmt || ''}
-                  onChange={(e) => setFormData({ ...formData, extraAmt: parseFloat(e.target.value) || 0 })}
+                  step="any"
+                  onValueChange={(v) => setFormData({ ...formData, extraAmt: v })}
                   className="w-1/3 h-10 px-3 rounded text-sm border font-mono"
                 />
               </div>

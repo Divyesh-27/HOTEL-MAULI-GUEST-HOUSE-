@@ -515,7 +515,22 @@ function migrateLegacyDataIfNeeded() {
 // ============================================================
 // IPC HANDLERS
 // ============================================================
+// Windows/Electron: after a native alert()/confirm() closes (or a child window
+// closes), Chromium can leave the page without keyboard focus — text can't be
+// typed or selected until the window is re-activated. Blur + focus restores it.
+function restoreWindowFocus(win) {
+  if (!win || win.isDestroyed()) return;
+  win.blur();
+  win.focus();
+  win.webContents.focus();
+}
+
 function registerIpcHandlers() {
+
+  // --- Window focus restore (called by renderer after native dialogs) ---
+  ipcMain.on('window:refocus', (event) => {
+    restoreWindowFocus(BrowserWindow.fromWebContents(event.sender));
+  });
 
   // --- State Key-Value Storage (Zustand persistence) ---
   ipcMain.handle('db:get', (_event, key) => {
@@ -936,6 +951,7 @@ function registerIpcHandlers() {
 
     activePrintPreviewWindow.on('closed', () => {
       activePrintPreviewWindow = null;
+      restoreWindowFocus(mainWindow);
     });
 
     const html = `

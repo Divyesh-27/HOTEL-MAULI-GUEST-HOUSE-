@@ -9,6 +9,7 @@ import { toLocalDateTimeString } from '@/components/modals/GuestDetailsModal';
 import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '@/utils/dateUtils';
 
 import { useShallow } from 'zustand/react/shallow';
+import { NumberInput } from '@/components/ui/number-input';
 
 interface BillingModalProps {
   booking: Booking | HistoryRecord;
@@ -413,11 +414,11 @@ const BillingModal = ({ booking, onClose, mode = 'checkout' }: BillingModalProps
               <p><strong>Rooms:</strong> {booking.roomNos.join(', ')}</p>
               <div className="flex items-center gap-2">
                 <strong>Stay Duration (Days):</strong>
-                <input 
-                  type="number" 
-                  min="1" 
-                  value={days} 
-                  onChange={(e) => setDays(Math.max(1, parseInt(e.target.value) || 1))}
+                <NumberInput
+                  min="1"
+                  value={days}
+                  onValueChange={setDays}
+                  onBlur={() => setDays(d => Math.max(1, Math.floor(d) || 1))}
                   className="w-16 px-2 py-0.5 border rounded bg-card text-foreground font-bold"
                 />
               </div>
@@ -471,7 +472,7 @@ const BillingModal = ({ booking, onClose, mode = 'checkout' }: BillingModalProps
             <div className="mb-4 p-4 border border-primary/30 rounded bg-primary/5">
               <h4 className="font-bold text-sm mb-3">Add Advance Payment</h4>
               <div className="grid grid-cols-3 gap-2">
-                <input type="number" placeholder="Amount" value={newAdvance.amount || ''} onChange={(e) => setNewAdvance({ ...newAdvance, amount: parseFloat(e.target.value) || 0 })} className="px-3 py-2 border rounded text-sm" />
+                <NumberInput placeholder="Amount" value={newAdvance.amount || ''} step="any" onValueChange={(v) => setNewAdvance({ ...newAdvance, amount: v })} className="px-3 py-2 border rounded text-sm" />
                 <select value={newAdvance.payMode} onChange={(e) => setNewAdvance({ ...newAdvance, payMode: e.target.value as any })} className="px-3 py-2 border rounded text-sm">
                   <option value="Cash">Cash</option>
                   <option value="UPI">UPI</option>

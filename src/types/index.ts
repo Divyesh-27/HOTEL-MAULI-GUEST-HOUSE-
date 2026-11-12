@@ -383,6 +383,7 @@ declare global {
       pdfGenerate?: (filename: string, htmlContent: string) => Promise<boolean>;
       pdfSaveAs?: (defaultFilename: string, htmlContent: string) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
       pdfOpen?: (filename: string) => Promise<boolean>;
+      refocusWindow?: () => void;
       printPreview?: (htmlContent: string) => Promise<boolean>;
       checkForUpdates?: () => Promise<{ success: boolean; version?: string; error?: string }>;
       installUpdate?: () => void;

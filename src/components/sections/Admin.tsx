@@ -9,6 +9,7 @@ import { normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils'
 import { APP_VERSION } from '@/constants/version';
 
 import { useShallow } from 'zustand/react/shallow';
+import { NumberInput } from '@/components/ui/number-input';
 
 const Admin = () => {
   const { 
@@ -396,11 +397,11 @@ const Admin = () => {
                   <option key={bed} value={bed}>{bed}</option>
                 ))}
               </select>
-              <input
-                type="number"
+              <NumberInput
                 placeholder="Rent (₹)"
                 value={newRoom.rent}
-                onChange={(e) => setNewRoom({ ...newRoom, rent: parseInt(e.target.value) || 0 })}
+                step="any"
+                onValueChange={(v) => setNewRoom({ ...newRoom, rent: v })}
                 className="px-3 py-2 border rounded text-sm"
               />
               <button
@@ -652,10 +653,10 @@ const Admin = () => {
                   <label className="text-xs text-muted">Tariff Limit (₹):</label>
                   <div className="flex items-center">
                     <span className="px-2.5 py-1.5 bg-secondary border border-r-0 rounded-l text-xs">Below ₹</span>
-                    <input
-                      type="number"
+                    <NumberInput
                       value={settingsForm.slab1_limit}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab1_limit: Number(e.target.value) || 0 })}
+                      step="any"
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab1_limit: v })}
                       className="w-full px-2 py-1.5 border rounded-r text-sm font-mono"
                     />
                   </div>
@@ -663,31 +664,28 @@ const Admin = () => {
                 <div className="grid grid-cols-3 gap-2 pt-2">
                   <div>
                     <label className="text-[10px] text-muted block font-semibold">GST Rate%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab1_gst}
-                      onChange={(e) => handleGstRateChange(1, parseFloat(e.target.value) || 0)}
+                      onValueChange={(v) => handleGstRateChange(1, v)}
                       className="w-full px-2 py-1 border rounded text-xs font-mono font-bold text-primary"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] text-muted block">CGST%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab1_cgst}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab1_cgst: parseFloat(e.target.value) || 0 })}
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab1_cgst: v })}
                       className="w-full px-2 py-1 border rounded text-xs font-mono"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] text-muted block">SGST%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab1_sgst}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab1_sgst: parseFloat(e.target.value) || 0 })}
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab1_sgst: v })}
                       className="w-full px-2 py-1 border rounded text-xs font-mono"
                     />
                   </div>
@@ -703,19 +701,19 @@ const Admin = () => {
                 <div className="grid grid-cols-2 gap-2 space-y-0">
                   <div>
                     <label className="text-xs text-muted">From (₹):</label>
-                    <input
-                      type="number"
+                    <NumberInput
                       value={settingsForm.slab2_from}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab2_from: Number(e.target.value) || 0 })}
+                      step="any"
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab2_from: v })}
                       className="w-full px-2 py-1.5 border rounded text-sm font-mono"
                     />
                   </div>
                   <div>
                     <label className="text-xs text-muted">To (₹):</label>
-                    <input
-                      type="number"
+                    <NumberInput
                       value={settingsForm.slab2_to}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab2_to: Number(e.target.value) || 0 })}
+                      step="any"
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab2_to: v })}
                       className="w-full px-2 py-1.5 border rounded text-sm font-mono"
                     />
                   </div>
@@ -723,31 +721,28 @@ const Admin = () => {
                 <div className="grid grid-cols-3 gap-2 pt-2">
                   <div>
                     <label className="text-[10px] text-muted block font-semibold">GST Rate%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab2_gst}
-                      onChange={(e) => handleGstRateChange(2, parseFloat(e.target.value) || 0)}
+                      onValueChange={(v) => handleGstRateChange(2, v)}
                       className="w-full px-2 py-1 border rounded text-xs font-mono font-bold text-primary"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] text-muted block">CGST%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab2_cgst}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab2_cgst: parseFloat(e.target.value) || 0 })}
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab2_cgst: v })}
                       className="w-full px-2 py-1 border rounded text-xs font-mono"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] text-muted block">SGST%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab2_sgst}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab2_sgst: parseFloat(e.target.value) || 0 })}
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab2_sgst: v })}
                       className="w-full px-2 py-1 border rounded text-xs font-mono"
                     />
                   </div>
@@ -764,10 +759,10 @@ const Admin = () => {
                   <label className="text-xs text-muted">Tariff Above (₹):</label>
                   <div className="flex items-center">
                     <span className="px-2.5 py-1.5 bg-secondary border border-r-0 rounded-l text-xs">Above ₹</span>
-                    <input
-                      type="number"
+                    <NumberInput
                       value={settingsForm.slab3_from}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab3_from: Number(e.target.value) || 0 })}
+                      step="any"
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab3_from: v })}
                       className="w-full px-2 py-1.5 border rounded-r text-sm font-mono"
                     />
                   </div>
@@ -775,31 +770,28 @@ const Admin = () => {
                 <div className="grid grid-cols-3 gap-2 pt-2">
                   <div>
                     <label className="text-[10px] text-muted block font-semibold">GST Rate%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab3_gst}
-                      onChange={(e) => handleGstRateChange(3, parseFloat(e.target.value) || 0)}
+                      onValueChange={(v) => handleGstRateChange(3, v)}
                       className="w-full px-2 py-1 border rounded text-xs font-mono font-bold text-primary"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] text-muted block">CGST%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab3_cgst}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab3_cgst: parseFloat(e.target.value) || 0 })}
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab3_cgst: v })}
                       className="w-full px-2 py-1 border rounded text-xs font-mono"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] text-muted block">SGST%</label>
-                    <input
-                      type="number"
-                      step="0.1"
+                    <NumberInput
+                      step="any"
                       value={settingsForm.slab3_sgst}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, slab3_sgst: parseFloat(e.target.value) || 0 })}
+                      onValueChange={(v) => setSettingsForm({ ...settingsForm, slab3_sgst: v })}
                       className="w-full px-2 py-1 border rounded text-xs font-mono"
                     />
                   </div>
@@ -901,12 +893,12 @@ const Admin = () => {
                       <td className="py-2.5 px-4">
                         <div className="relative max-w-[200px]">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">₹</span>
-                          <input
-                            type="number"
+                          <NumberInput
                             min="0"
                             id={`discount-rate-rent-${index}`}
                             value={rate.rent || ''}
-                            onChange={(e) => handleUpdateDiscountRate(index, 'rent', parseFloat(e.target.value) || 0)}
+                            step="any"
+                            onValueChange={(v) => handleUpdateDiscountRate(index, 'rent', v)}
                             className="w-full pl-7 pr-3 py-1.5 border rounded text-sm font-semibold bg-background"
                             placeholder="Rent (e.g. 1600)"
                           />
@@ -915,12 +907,12 @@ const Admin = () => {
                       <td className="py-2.5 px-4">
                         <div className="relative max-w-[200px]">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">₹</span>
-                          <input
-                            type="number"
+                          <NumberInput
                             min="0"
                             id={`discount-rate-discount-${index}`}
                             value={rate.discount || ''}
-                            onChange={(e) => handleUpdateDiscountRate(index, 'discount', parseFloat(e.target.value) || 0)}
+                            step="any"
+                            onValueChange={(v) => handleUpdateDiscountRate(index, 'discount', v)}
                             className="w-full pl-7 pr-3 py-1.5 border rounded text-sm font-semibold text-destructive bg-background"
                             placeholder="Discount (e.g. 400)"
                           />
@@ -1060,11 +1052,11 @@ const Admin = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-muted mb-1">Room Price / Rent (₹) *</label>
-                <input
-                  type="number"
+                <NumberInput
                   min="0"
                   value={editRoomForm.rent}
-                  onChange={(e) => setEditRoomForm({ ...editRoomForm, rent: parseInt(e.target.value) || 0 })}
+                  step="any"
+                  onValueChange={(v) => setEditRoomForm({ ...editRoomForm, rent: v })}
                   className="w-full px-3 py-2 border rounded text-sm bg-background font-mono"
                   required
                 />

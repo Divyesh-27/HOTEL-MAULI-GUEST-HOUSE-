@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // --- Window focus restore (after native alert/confirm) ---
+  refocusWindow: () => ipcRenderer.send('window:refocus'),
+
   // --- State Key-Value Storage (Zustand persistence) ---
   get: (key) => ipcRenderer.invoke('db:get', key),
   set: (key, value) => ipcRenderer.invoke('db:set', key, value),

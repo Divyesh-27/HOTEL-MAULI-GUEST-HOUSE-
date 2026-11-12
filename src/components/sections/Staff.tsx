@@ -14,6 +14,7 @@ import {
 } from '@/types';
 import { toLocalDateString } from '@/utils/dateUtils';
 import { calculateSalarySlipData, generateSalarySlipHtml } from '@/utils/salarySlipUtils';
+import { NumberInput } from '@/components/ui/number-input';
 import { 
   SalaryCycle, generateEmployeeCycles, calculateCycleAttendance, 
   calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive 
@@ -1931,16 +1932,21 @@ const CyclePayoutModal = ({
                       {isChecked && (
                         <div className="flex items-center gap-1">
                           <span className="text-muted-foreground">₹</span>
-                          <input
-                            type="number"
+                          <NumberInput
                             min="1"
                             max={bal}
+                            step="any"
                             value={amt}
-                            onChange={e => {
-                              const val = Math.min(bal, Math.max(0, parseFloat(e.target.value) || 0));
+                            onValueChange={val => {
                               setBorrowSelections(prev => ({
                                 ...prev,
                                 [b.id]: { selected: true, amount: val }
+                              }));
+                            }}
+                            onBlur={() => {
+                              setBorrowSelections(prev => ({
+                                ...prev,
+                                [b.id]: { selected: true, amount: Math.min(bal, Math.max(0, Number(prev[b.id]?.amount) || 0)) }
                               }));
                             }}
                             className="w-20 px-1.5 py-0.5 bg-secondary border border-border rounded text-xs text-right font-bold text-foreground"
@@ -2215,12 +2221,12 @@ const RecordAdjustmentModal = ({ employee, cycle, onClose, onSave }: RecordAdjus
 
           <div>
             <label className="block text-xs font-semibold text-foreground mb-1">Amount (₹) *</label>
-            <input
-              type="number"
+            <NumberInput
               min="1"
               required
               value={amount || ''}
-              onChange={e => setAmount(parseFloat(e.target.value) || 0)}
+              step="any"
+              onValueChange={(v) => setAmount(v)}
               placeholder="e.g. 500"
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
             />
@@ -2591,12 +2597,12 @@ const AddEditEmployeeModal = ({
 
             <div>
               <label className="block text-xs font-semibold text-foreground mb-1">Monthly Salary (₹) *</label>
-              <input
-                type="number"
+              <NumberInput
                 required
                 min="0"
                 value={salary}
-                onChange={e => setSalary(parseFloat(e.target.value) || 0)}
+                step="any"
+                onValueChange={(v) => setSalary(v)}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
@@ -2829,12 +2835,12 @@ const RecordAdvanceModal = ({ employee, defaultDate, cycles, onClose, onSave }: 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="block text-xs font-semibold text-foreground mb-1">Advance Amount (₹) *</label>
-            <input
-              type="number"
+            <NumberInput
               min="1"
               required
               value={amount || ''}
-              onChange={e => setAmount(parseFloat(e.target.value) || 0)}
+              step="any"
+              onValueChange={(v) => setAmount(v)}
               placeholder="e.g. 1000"
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
             />
@@ -2920,12 +2926,12 @@ const RecordBorrowModal = ({ employee, defaultDate, onClose, onSave }: RecordBor
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="block text-xs font-semibold text-foreground mb-1">Borrow Amount (₹) *</label>
-            <input
-              type="number"
+            <NumberInput
               min="1"
               required
               value={amount || ''}
-              onChange={e => setAmount(parseFloat(e.target.value) || 0)}
+              step="any"
+              onValueChange={(v) => setAmount(v)}
               placeholder="e.g. 500"
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
             />
