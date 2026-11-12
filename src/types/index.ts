@@ -286,7 +286,13 @@ export interface RoomHold {
   status: 'active' | 'released' | 'converted';
 }
 
-export type SectionType = 'dashboard' | 'registration' | 'billing' | 'calendar' | 'history' | 'revenue' | 'admin' | 'staff';
+export type SectionType = 'dashboard' | 'registration' | 'billing' | 'calendar' | 'room-cards' | 'history' | 'revenue' | 'admin' | 'staff';
+
+/**
+ * Data handed to New Registration. Guest fields come from "New Booking (Same
+ * Guest)"; roomNos/checkIn/isReservation/returnTo come from a Room Cards card.
+ */
+export type RegistrationPrefill = Partial<Booking> & { returnTo?: SectionType };
 
 export interface InvoiceSettings {
   id?: string;

@@ -1,7 +1,7 @@
 import { useState, FormEvent, useRef, useEffect } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
 import { useStore } from '@/store/useStore';
-import { Booking, AdvancePayment, DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES } from '@/types';
+import { Booking, AdvancePayment, DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, SectionType } from '@/types';
 import { cn } from '@/lib/utils';
 import { getAvailableRoomsForPeriod } from '@/utils/availabilityUtils';
 import { findFirstConflictDate, formatDayLabel } from '@/utils/roomDayStatus';
@@ -78,6 +78,8 @@ const Registration = () => {
   });
   
   const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
+  // Section to go back to after saving (set when opened from a Room Cards card).
+  const [returnTo, setReturnTo] = useState<SectionType | null>(null);
   const [occSearch, setOccSearch] = useState('');
   const [occDropdownOpen, setOccDropdownOpen] = useState(false);
   const [idProofSearch, setIdProofSearch] = useState('');
@@ -132,8 +134,14 @@ const Registration = () => {
         extraAmt: 0,
         identityProof: '',
         digitalSignature: '',
+        // Room Cards sets this; the same-guest flow leaves it unchanged.
+        ...(prefilledRegistration.isReservation !== undefined && { isReservation: prefilledRegistration.isReservation }),
       }));
-      setSelectedRooms([]);
+      // Room Cards pre-selects its room; the same-guest flow starts with none.
+      const prefilledRooms = prefilledRegistration.roomNos || [];
+      setSelectedRooms(prefilledRooms);
+      prefilledRooms.forEach(r => createRoomHold(r, DEVICE_ID));
+      setReturnTo(prefilledRegistration.returnTo || null);
       if (prefilledRegistration.occupation) {
         setOccSearch(prefilledRegistration.occupation);
       }
@@ -332,7 +340,7 @@ const Registration = () => {
     alert(formData.isReservation ? 'Reservation Created Successfully!' : 'Guest Check-In Successful!');
     
     resetForm();
-    setSection('dashboard');
+    setSection(returnTo || 'dashboard');
   };
 
   const resetForm = () => {

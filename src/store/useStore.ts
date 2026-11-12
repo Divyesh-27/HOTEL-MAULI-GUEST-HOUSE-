@@ -6,7 +6,7 @@ import {
   DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, RoomHold,
   StaffRole, Shift, Employee, AttendanceRecord, SalaryAdvance, BorrowRecord, SalaryPayment,
   SalaryDeductionLedgerItem, SalaryAdjustment,
-  RateMode, RoomModeRates, BookingRateSnapshot
+  RateMode, RoomModeRates, BookingRateSnapshot, RegistrationPrefill
 } from '@/types';
 import {
   NORMAL_RATE_MODE_ID, DEFAULT_RATE_MODES, getActiveRateMode, buildRateSnapshot
@@ -157,8 +157,11 @@ interface StoreState {
   setSection: (section: SectionType) => void;
   setFilter: (filter: string) => void;
   setMonth: (date: Date) => void;
-  prefilledRegistration: Partial<Booking> | null;
-  setPrefilledRegistration: (data: Partial<Booking> | null) => void;
+  prefilledRegistration: RegistrationPrefill | null;
+  setPrefilledRegistration: (data: RegistrationPrefill | null) => void;
+  /** Day shown in Room Cards (local YYYY-MM-DD); null = today. Not persisted. */
+  roomCardsDate: string | null;
+  setRoomCardsDate: (date: string | null) => void;
   
   // Actions - Bookings
   addBooking: (booking: Booking) => void;
@@ -361,9 +364,9 @@ export const useStore = create<StoreState>()(
       roomHolds: [],
       appUsers: [],
       appRoles: [
-        { id: 'role-admin', name: 'Admin', permissions: ['dashboard', 'registration', 'billing', 'calendar', 'history', 'revenue', 'admin', 'staff'] },
-        { id: 'role-manager', name: 'Manager', permissions: ['dashboard', 'registration', 'billing', 'calendar', 'history', 'revenue'] },
-        { id: 'role-staff', name: 'Staff', permissions: ['dashboard', 'registration', 'billing', 'calendar'] }
+        { id: 'role-admin', name: 'Admin', permissions: ['dashboard', 'registration', 'billing', 'calendar', 'room-cards', 'history', 'revenue', 'admin', 'staff'] },
+        { id: 'role-manager', name: 'Manager', permissions: ['dashboard', 'registration', 'billing', 'calendar', 'room-cards', 'history', 'revenue'] },
+        { id: 'role-staff', name: 'Staff', permissions: ['dashboard', 'registration', 'billing', 'calendar', 'room-cards'] }
       ],
       
       // UI State
@@ -391,6 +394,8 @@ export const useStore = create<StoreState>()(
       setMonth: (date) => set({ currentMonth: date }),
       prefilledRegistration: null,
       setPrefilledRegistration: (data) => set({ prefilledRegistration: data }),
+      roomCardsDate: null,
+      setRoomCardsDate: (date) => set({ roomCardsDate: date }),
       
       // Bookings
       addBooking: (booking) => set((state) => {
@@ -1862,6 +1867,17 @@ export const useStore = create<StoreState>()(
 
           if (state.invoiceSettings && (!state.invoiceSettings.ac_to_non_ac_discount_rates || state.invoiceSettings.ac_to_non_ac_discount_rates.length === 0)) {
             state.invoiceSettings.ac_to_non_ac_discount_rates = DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES;
+          }
+
+          // --- Room Cards: roles that can see Calendar also get Room Cards ---
+          // Additive only: nothing is removed from any role.
+          if (Array.isArray(state.appRoles)) {
+            state.appRoles = state.appRoles.map((role) => {
+              const perms = Array.isArray(role.permissions) ? role.permissions : [];
+              return perms.includes('calendar') && !perms.includes('room-cards')
+                ? { ...role, permissions: [...perms, 'room-cards'] }
+                : role;
+            });
           }
 
           // --- Season / rate modes (additive migration, no data is changed) ---
