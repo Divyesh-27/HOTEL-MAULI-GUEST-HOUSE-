@@ -34,3 +34,6 @@ release/
 *.sw?
 *.tsbuildinfo
 
+
+# Supabase CLI local state (project link, version cache)
+supabase/.temp/
