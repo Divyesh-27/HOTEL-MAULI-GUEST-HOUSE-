@@ -2,6 +2,8 @@
 -- Staff-only access for every table and storage bucket the apps sync.
 --
 -- !!! DO NOT APPLY YET !!!
+-- Parked in supabase/pending/ so `supabase db push` cannot apply it. Move it
+-- back to supabase/migrations/ only when staff sign-in has been verified.
 -- Desktop sync, realtime and the mobile app currently talk to Supabase with
 -- the ANON key and no signed-in user. After this migration anon has no access,
 -- so sync writes would be rejected and marked permanently Failed in the local
