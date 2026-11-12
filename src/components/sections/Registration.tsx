@@ -10,6 +10,7 @@ import { generateUUID } from '@/lib/uuid';
 import { pushBookingToCloud, uploadBase64ToStorage } from '@/lib/syncActions';
 import { createRoomHold, releaseRoomHold } from '@/lib/supabaseBridge';
 import { toLocalDateTimeString } from '@/utils/dateUtils';
+import { createEmptyDraft, createEmptyRegistrationForm, hasDraftContent, RegistrationDraft } from '@/utils/registrationDraft';
 
 import { useShallow } from 'zustand/react/shallow';
 import { NumberInput } from '@/components/ui/number-input';
@@ -21,6 +22,7 @@ const Registration = () => {
   const { 
     rooms, bookings, roomStatus, addBooking, setSection, getNextBillNumber, isDeveloperMode,
     prefilledRegistration, setPrefilledRegistration, invoiceSettings, roomHolds,
+    registrationDraft, setRegistrationDraft,
     rateModes, activeRateModeId, roomModeRates
   } = useStore(useShallow(state => ({
     rooms: state.rooms,
@@ -32,6 +34,8 @@ const Registration = () => {
     isDeveloperMode: state.isDeveloperMode,
     prefilledRegistration: state.prefilledRegistration,
     setPrefilledRegistration: state.setPrefilledRegistration,
+    registrationDraft: state.registrationDraft,
+    setRegistrationDraft: state.setRegistrationDraft,
     invoiceSettings: state.invoiceSettings,
     roomHolds: state.roomHolds,
     rateModes: state.rateModes,
@@ -45,41 +49,12 @@ const Registration = () => {
     getRoomRateForMode(rooms.find(r => r.roomNo === roomNo), activeRateMode.id, roomModeRates);
   const sigPadRef = useRef<any>(null);
   
-  const [formData, setFormData] = useState({
-    guestName: '',
-    customerGstin: '',
-    mobile: '',
-    address: '',
-    persons: '',
-    otherPersons: '', // <--- NEW FIELD
-    age: '',
-    coming: '',
-    going: '',
-    checkIn: toLocalDateTimeString(new Date()),
-    days: 1,
-    advance: 0,
-    discount: 0,
-    discountNote: '',
-    discountReason: 'Normal Discount',
-    showDiscountOnInvoice: true,
-    extraNote: '',
-    extraAmt: 0,
-    payMode: 'Cash',
-    advancePayMode: 'Cash' as 'Cash' | 'UPI' | 'Card' | 'Other',
-    advanceNote: '',
-    isReservation: false,
-    occupation: '',
-    identityProofType: '',
-    carNo: '',
-    carModel: '',
-    identityProof: '',
-    digitalSignature: '',
-  });
-  
-  const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
-  const [occSearch, setOccSearch] = useState('');
+  const [formData, setFormData] = useState(() => registrationDraft?.formData ?? createEmptyRegistrationForm());
+
+  const [selectedRooms, setSelectedRooms] = useState<string[]>(() => registrationDraft?.selectedRooms ?? []);
+  const [occSearch, setOccSearch] = useState(() => registrationDraft?.occSearch ?? '');
   const [occDropdownOpen, setOccDropdownOpen] = useState(false);
-  const [idProofSearch, setIdProofSearch] = useState('');
+  const [idProofSearch, setIdProofSearch] = useState(() => registrationDraft?.idProofSearch ?? '');
   const [idProofDropdownOpen, setIdProofDropdownOpen] = useState(false);
   const PREDEFINED_OCCUPATIONS = [
     'Business',
@@ -102,11 +77,50 @@ const Registration = () => {
     'Passport'
   ];
 
-  const [extraChargeType, setExtraChargeType] = useState<'Extra Bed' | 'Custom'>('Extra Bed');
+  const [extraChargeType, setExtraChargeType] = useState<'Extra Bed' | 'Custom'>(() => registrationDraft?.extraChargeType ?? 'Extra Bed');
+
+  // --- Draft: keep the form in memory across tab switches ---
+  const currentDraft: RegistrationDraft = { formData, selectedRooms, occSearch, idProofSearch, extraChargeType };
+  const latestDraftRef = useRef(currentDraft);
+  latestDraftRef.current = currentDraft;
+  const saveDraft = (draft: RegistrationDraft) => setRegistrationDraft(hasDraftContent(draft) ? draft : null);
+
+  // Save ~300 ms after the last change...
+  useEffect(() => {
+    const t = setTimeout(() => saveDraft(latestDraftRef.current), 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData, selectedRooms, occSearch, idProofSearch, extraChargeType]);
+
+  // ...and immediately when leaving the tab.
+  useEffect(() => {
+    return () => {
+      // Logged out: the draft was cleared on purpose, do not save it back.
+      if (!useStore.getState().isAuthenticated) return;
+      saveDraft(latestDraftRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Restore the signature drawing and room holds from a restored draft.
+  useEffect(() => {
+    if (formData.digitalSignature && sigPadRef.current?.isEmpty()) {
+      sigPadRef.current.fromDataURL(formData.digitalSignature);
+    }
+    selectedRooms.forEach(r => createRoomHold(r, DEVICE_ID));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Handle prefilled registration data from GuestDetailsModal ("New Booking (Same Guest)")
   useEffect(() => {
     if (prefilledRegistration) {
+      if (hasDraftContent(latestDraftRef.current)) {
+        if (!window.confirm('Replace your current draft?')) {
+          setPrefilledRegistration(null);
+          return;
+        }
+        resetForm();
+      }
       setFormData(prev => ({
         ...prev,
         guestName: prefilledRegistration.guestName || '',
@@ -320,40 +334,13 @@ const Registration = () => {
     alert(formData.isReservation ? 'Reservation Created Successfully!' : 'Guest Check-In Successful!');
     
     resetForm();
+    latestDraftRef.current = createEmptyDraft();
+    setRegistrationDraft(null);
     setSection('dashboard');
   };
 
   const resetForm = () => {
-    setFormData({
-      guestName: '',
-      customerGstin: '',
-      mobile: '',
-      address: '',
-      persons: '',
-      otherPersons: '', // <--- RESET NEW FIELD
-      age: '',
-      coming: '',
-      going: '',
-      checkIn: toLocalDateTimeString(new Date()),
-      days: 1,
-      advance: 0,
-      discount: 0,
-      discountNote: '',
-      discountReason: 'Normal Discount',
-      showDiscountOnInvoice: true,
-      extraNote: '',
-      extraAmt: 0,
-      payMode: 'Cash',
-      advancePayMode: 'Cash',
-      advanceNote: '',
-      isReservation: false,
-      occupation: '',
-      identityProofType: '',
-      carNo: '',
-      carModel: '',
-      identityProof: '',
-      digitalSignature: '',
-    });
+    setFormData(createEmptyRegistrationForm());
     setSelectedRooms([]);
     sigPadRef.current?.clear();
     setOccSearch('');
@@ -361,6 +348,13 @@ const Registration = () => {
     setIdProofSearch('');
     setIdProofDropdownOpen(false);
     setExtraChargeType('Extra Bed');
+  };
+
+  const handleClearAll = () => {
+    if (hasDraftContent(latestDraftRef.current) && !window.confirm('Clear all fields, rooms, ID photo and signature?')) return;
+    resetForm();
+    latestDraftRef.current = createEmptyDraft();
+    setRegistrationDraft(null);
   };
 
   const handleFormKeyDown = (e: React.KeyboardEvent) => {
@@ -435,6 +429,14 @@ const Registration = () => {
     <div className="max-w-6xl mx-auto bg-card rounded-xl shadow-sm border border-border animate-fade-in">
       <div className="p-6 border-b border-border bg-secondary/50 flex justify-between items-center">
         <h3 className="font-bold text-lg text-foreground">New Guest Registration</h3>
+        <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleClearAll}
+          className="px-4 py-2 bg-secondary text-foreground rounded hover:bg-secondary/80 font-bold text-xs transition-colors"
+        >
+          Clear All
+        </button>
         {isDeveloperMode && (
           <button
             type="button"
@@ -475,6 +477,7 @@ const Registration = () => {
             Fill Dummy Data (Dev Mode)
           </button>
         )}
+        </div>
       </div>
       
       <form onSubmit={handleSaveAndPrint} onKeyDown={handleFormKeyDown} className="p-8">
@@ -1089,13 +1092,6 @@ const Registration = () => {
             
             {/* Submit Buttons */}
             <div className="flex items-end justify-end gap-3 flex-1">
-              <button
-                type="button"
-                onClick={resetForm}
-                className="px-6 py-3 bg-secondary text-foreground rounded hover:bg-secondary/80 font-bold transition-colors"
-              >
-                Clear Form
-              </button>
               <button
                 id="reg-field-submitBtn"
                 type="submit"

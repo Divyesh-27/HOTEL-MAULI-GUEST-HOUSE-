@@ -12,6 +12,7 @@ import {
   NORMAL_RATE_MODE_ID, DEFAULT_RATE_MODES, getActiveRateMode, buildRateSnapshot
 } from '@/utils/rateModeUtils';
 import { generateUUID } from '@/lib/uuid';
+import type { RegistrationDraft } from '@/utils/registrationDraft';
 import { getRoomStatusOnDate, normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 import { toLocalDateString } from '@/utils/dateUtils';
 import { generateEmployeeCycles, generateSlipNumber, formatDDMMYYYY } from '@/utils/salaryCycleUtils';
@@ -159,6 +160,9 @@ interface StoreState {
   setMonth: (date: Date) => void;
   prefilledRegistration: Partial<Booking> | null;
   setPrefilledRegistration: (data: Partial<Booking> | null) => void;
+  /** In-progress New Registration form. Memory only: not in partialize, never written to disk. */
+  registrationDraft: RegistrationDraft | null;
+  setRegistrationDraft: (draft: RegistrationDraft | null) => void;
   
   // Actions - Bookings
   addBooking: (booking: Booking) => void;
@@ -382,7 +386,7 @@ export const useStore = create<StoreState>()(
         if (typeof window !== 'undefined' && (window as any).electronAPI?.vaultLock) {
           (window as any).electronAPI.vaultLock().catch(console.error);
         }
-        set({ isAuthenticated: false, currentUser: null, lastLoginTime: null });
+        set({ isAuthenticated: false, currentUser: null, lastLoginTime: null, registrationDraft: null });
       },
       
       // Navigation
@@ -391,6 +395,8 @@ export const useStore = create<StoreState>()(
       setMonth: (date) => set({ currentMonth: date }),
       prefilledRegistration: null,
       setPrefilledRegistration: (data) => set({ prefilledRegistration: data }),
+      registrationDraft: null,
+      setRegistrationDraft: (draft) => set({ registrationDraft: draft }),
       
       // Bookings
       addBooking: (booking) => set((state) => {
