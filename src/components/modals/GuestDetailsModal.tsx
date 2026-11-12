@@ -10,6 +10,8 @@ interface GuestDetailsModalProps {
   onClose: () => void;
   onUpdate?: (updatedData: any) => void;
   initialEditMode?: boolean;
+  /** Optional extra buttons shown in the footer next to Close (e.g. from Room Cards). */
+  footerActions?: React.ReactNode;
 }
 
 import { toLocalDateTimeString } from '@/utils/dateUtils';
@@ -63,7 +65,7 @@ const PREDEFINED_ID_PROOFS = [
   'Passport'
 ];
 
-const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false }: GuestDetailsModalProps) => {
+const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false, footerActions }: GuestDetailsModalProps) => {
   const [isEditing, setIsEditing] = useState(initialEditMode);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -557,7 +559,8 @@ const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false }:
           </div>
 
           {/* Footer */}
-          <div className="p-4 bg-secondary/50 border-t flex justify-end">
+          <div className="p-4 bg-secondary/50 border-t flex justify-end gap-2">
+            {footerActions}
             <button onClick={onClose} className="px-6 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-bold shadow-sm">
               Close
             </button>
