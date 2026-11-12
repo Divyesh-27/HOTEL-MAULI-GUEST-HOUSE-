@@ -4,6 +4,7 @@ import { useStore } from '@/store/useStore';
 import { Booking, AdvancePayment, DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES } from '@/types';
 import { cn } from '@/lib/utils';
 import { getAvailableRoomsForPeriod } from '@/utils/availabilityUtils';
+import { findFirstConflictDate, formatDayLabel } from '@/utils/roomDayStatus';
 import { printAdvanceReceipt } from '@/utils/printAdvanceReceipt';
 import ImageCapture from '@/components/ui/ImageCapture'; 
 import { generateUUID } from '@/lib/uuid';
@@ -199,6 +200,17 @@ const Registration = () => {
     if (!trimmedGuestName) {
       alert('Please enter a valid guest name.');
       return;
+    }
+
+    // Never allow a stay that overlaps another booking of the same room. The
+    // room list only hides overlapping rooms; a room ticked earlier stays
+    // selected if the dates or days change afterwards, so re-check on save.
+    for (const roomNo of selectedRooms) {
+      const conflictDay = findFirstConflictDate(roomNo, formData.checkIn, formData.days, bookings);
+      if (conflictDay) {
+        alert(`Room ${roomNo} is already booked on ${formatDayLabel(conflictDay)}. This stay overlaps another booking — change the dates or choose another room.`);
+        return;
+      }
     }
 
     const trimmedMobile = formData.mobile.trim();
