@@ -17,8 +17,13 @@ import { calculateSalarySlipData, generateSalarySlipHtml } from '@/utils/salaryS
 import { NumberInput } from '@/components/ui/number-input';
 import { 
   SalaryCycle, generateEmployeeCycles, calculateCycleAttendance, 
-  calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive 
+  calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive,
+  CycleAttendanceSummary, AttendanceMark, PAY_BASIS_DAYS, normalizeAttendanceStatus, formatShiftLabel, formatRs,
+  projectDuePayouts, calculateFinalSettlement
 } from '@/utils/salaryCycleUtils';
+import {
+  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard
+} from './StaffPanels';
 
 const Staff = () => {
   const {
@@ -39,6 +44,9 @@ const Staff = () => {
     softDeleteEmployee,
     markAttendance,
     markAllPresent,
+    addShift,
+    updateShift,
+    deleteShift,
     addSalaryAdvance,
     updateSalaryAdvance,
     deleteSalaryAdvance,
@@ -50,6 +58,8 @@ const Staff = () => {
     executeCyclePayout,
     reverseCyclePayout,
     finalSettlement,
+    salaryAuditLog,
+    resolveOwedDebt,
   } = useStore(useShallow(state => ({
     staffRoles: state.staffRoles,
     shifts: state.shifts,
@@ -68,6 +78,9 @@ const Staff = () => {
     softDeleteEmployee: state.softDeleteEmployee,
     markAttendance: state.markAttendance,
     markAllPresent: state.markAllPresent,
+    addShift: state.addShift,
+    updateShift: state.updateShift,
+    deleteShift: state.deleteShift,
     addSalaryAdvance: state.addSalaryAdvance,
     updateSalaryAdvance: state.updateSalaryAdvance,
     deleteSalaryAdvance: state.deleteSalaryAdvance,
@@ -79,6 +92,8 @@ const Staff = () => {
     executeCyclePayout: state.executeCyclePayout,
     reverseCyclePayout: state.reverseCyclePayout,
     finalSettlement: state.finalSettlement,
+    salaryAuditLog: state.salaryAuditLog,
+    resolveOwedDebt: state.resolveOwedDebt,
   })));
 
   // Today string
@@ -90,52 +105,35 @@ const Staff = () => {
     return employees.filter(e => e.status === 'active' && !e.deleted_at);
   }, [employees]);
 
+  // Former (inactive) staff stay reachable so money they owe remains visible
+  const [showFormerStaff, setShowFormerStaff] = useState(false);
+  const listEmployees = useMemo(() => {
+    return showFormerStaff ? employees.filter(e => !e.deleted_at) : activeEmployees;
+  }, [employees, activeEmployees, showFormerStaff]);
+
   const filteredEmployees = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return activeEmployees;
-    return activeEmployees.filter(e => 
+    if (!q) return listEmployees;
+    return listEmployees.filter(e => 
       e.name.toLowerCase().includes(q) || 
       (e.phone && e.phone.includes(q)) ||
       (e.aadhaarLast4 && e.aadhaarLast4.includes(q))
     );
-  }, [activeEmployees, searchQuery]);
+  }, [listEmployees, searchQuery]);
 
   const [selectedEmpId, setSelectedEmpId] = useState<string>('');
 
   useEffect(() => {
-    if (!selectedEmpId && activeEmployees.length > 0) {
-      setSelectedEmpId(activeEmployees[0].id);
-    } else if (selectedEmpId && !activeEmployees.some(e => e.id === selectedEmpId)) {
-      setSelectedEmpId(activeEmployees[0]?.id || '');
+    if (!selectedEmpId && listEmployees.length > 0) {
+      setSelectedEmpId(listEmployees[0].id);
+    } else if (selectedEmpId && !listEmployees.some(e => e.id === selectedEmpId)) {
+      setSelectedEmpId(listEmployees[0]?.id || '');
     }
-  }, [activeEmployees, selectedEmpId]);
+  }, [listEmployees, selectedEmpId]);
 
   const selectedEmployee = useMemo(() => {
     return employees.find(e => e.id === selectedEmpId) || null;
   }, [employees, selectedEmpId]);
-
-  // Calendar Date State (selected month and selected day)
-  const [viewDate, setViewDate] = useState<Date>(() => new Date());
-  const [selectedDayStr, setSelectedDayStr] = useState<string>(() => toLocalDateString(new Date()));
-  const [showWeeklyOff, setShowWeeklyOff] = useState<boolean>(true);
-
-  // Month identifiers
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth(); // 0-indexed
-  const currentMonthStr = useMemo(() => {
-    return `${year}-${String(month + 1).padStart(2, '0')}`;
-  }, [year, month]);
-
-  // Range Check state (defaults to 1st of month to today / end of month)
-  const [rangeFrom, setRangeFrom] = useState<string>(() => `${currentMonthStr}-01`);
-  const [rangeTo, setRangeTo] = useState<string>(() => todayStr);
-
-  useEffect(() => {
-    setRangeFrom(`${currentMonthStr}-01`);
-    const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
-    const endStr = `${currentMonthStr}-${String(lastDayOfMonth).padStart(2, '0')}`;
-    setRangeTo(todayStr > endStr ? endStr : (todayStr < `${currentMonthStr}-01` ? `${currentMonthStr}-01` : todayStr));
-  }, [currentMonthStr, year, month, todayStr]);
 
   // Employee Cycles & Active Cycle Selection
   const employeeCycles = useMemo(() => {
@@ -164,25 +162,14 @@ const Staff = () => {
     return employeeCycles[selectedCycleIdx] || employeeCycles[employeeCycles.length - 1] || null;
   }, [employeeCycles, selectedCycleIdx]);
 
-  // Sync calendar month with selected cycle start date
-  useEffect(() => {
-    if (selectedCycle) {
-      const parts = selectedCycle.startDate.split('-').map(Number);
-      setViewDate(new Date(parts[0], parts[1] - 1, 1));
-      setSelectedDayStr(selectedCycle.startDate);
-    }
-  }, [selectedCycle?.id]);
-
   // Modals state
   const [showAddEditModal, setShowAddEditModal] = useState<boolean>(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [showPayoutModal, setShowPayoutModal] = useState<boolean>(false);
   const [showReverseModal, setShowReverseModal] = useState<boolean>(false);
   const [paymentToReverse, setPaymentToReverse] = useState<SalaryPayment | null>(null);
-  const [showAdjustmentModal, setShowAdjustmentModal] = useState<boolean>(false);
   const [showFinalSettlementModal, setShowFinalSettlementModal] = useState<boolean>(false);
-  const [showAdvanceModal, setShowAdvanceModal] = useState<boolean>(false);
-  const [showBorrowModal, setShowBorrowModal] = useState<boolean>(false);
+  const [showShiftsModal, setShowShiftsModal] = useState<boolean>(false);
   const [showSalarySlipModal, setShowSalarySlipModal] = useState<boolean>(false);
 
   // Vault state
@@ -287,74 +274,62 @@ const Staff = () => {
     }
   };
 
-  // --- TOP STATS BAR CALCULATIONS ---
-  const presentTodayCount = useMemo(() => {
-    return activeEmployees.filter(emp => 
-      attendance.some(a => a.employeeId === emp.id && a.date === todayStr && a.status === 'Present')
-    ).length;
+  // --- TODAY'S STATS ---
+  const todayCounts = useMemo(() => {
+    const byEmp = new Map<string, string>();
+    for (const a of attendance) {
+      if (a.date === todayStr && !a.deleted_at) byEmp.set(a.employeeId, a.status);
+    }
+    let present = 0, halfDay = 0, absent = 0, notMarked = 0;
+    for (const emp of activeEmployees) {
+      const st = normalizeAttendanceStatus(byEmp.get(emp.id));
+      if (st === 'Present') present++;
+      else if (st === 'Half Day') halfDay++;
+      else if (st === 'Absent') absent++;
+      else if (todayStr >= emp.joiningDate) notMarked++;
+    }
+    return { present, halfDay, absent, notMarked };
   }, [activeEmployees, attendance, todayStr]);
 
-  const absentTodayCount = useMemo(() => {
-    return activeEmployees.filter(emp => 
-      attendance.some(a => a.employeeId === emp.id && a.date === todayStr && a.status === 'Absent')
-    ).length;
-  }, [activeEmployees, attendance, todayStr]);
-
-  const notMarkedTodayCount = useMemo(() => {
-    return Math.max(0, activeEmployees.length - (presentTodayCount + absentTodayCount));
-  }, [activeEmployees.length, presentTodayCount, absentTodayCount]);
-
-  // PRD Section 9: "Payable now" - sum of net for all Due cycles across active staff
-  const totalPayableNow = useMemo(() => {
-    return activeEmployees.reduce((total, emp) => {
-      const empCycles = generateEmployeeCycles(emp, todayStr, salaryPayments, attendance);
-      const dueCycles = empCycles.filter(c => c.status === 'Due');
-      let empDueTotal = 0;
-      for (const dc of dueCycles) {
-        const attSummary = calculateCycleAttendance(emp, dc, attendance, todayStr);
-        const cycleAdvs = salaryAdvances
-          .filter(a => a.employeeId === emp.id && !a.deleted_at && (a.transactionDate || a.date) >= dc.startDate && (a.transactionDate || a.date) <= dc.endDate)
-          .reduce((s, a) => s + (Number(a.amount) || 0), 0);
-        
-        const openAdjs = (salaryAdjustments || [])
-          .filter(a => a.employeeId === emp.id && a.status === 'Open' && !a.deleted_at)
-          .reduce((s, a) => s + Number(a.amount || 0), 0);
-
-        const fin = calculateCycleFinancials(
-          emp.monthlySalary,
-          dc.cycleDays,
-          attSummary.deductedDays,
-          cycleAdvs,
-          0,
-          0,
-          openAdjs
-        );
-        empDueTotal += fin.netPayable;
-      }
-      return total + empDueTotal;
-    }, 0);
+  // "Payable now" and which employees have a Due cycle (one cycle pass per employee)
+  const { totalPayableNow, dueEmployeeIds } = useMemo(() => {
+    let total = 0;
+    const due = new Set<string>();
+    for (const emp of activeEmployees) {
+      const dueCycles = generateEmployeeCycles(emp, todayStr, salaryPayments, attendance).filter(c => c.status === 'Due');
+      if (dueCycles.length === 0) continue;
+      due.add(emp.id);
+      const openAdjs = (salaryAdjustments || [])
+        .filter(a => a.employeeId === emp.id && a.status === 'Open' && !a.deleted_at)
+        .reduce((s, a) => s + Number(a.amount || 0), 0);
+      // Same figures as the Payout window: debt and advances brought forward included,
+      // each cycle paid in order and never below 0.
+      total += projectDuePayouts(emp, dueCycles, attendance, salaryAdvances, openAdjs, todayStr).total;
+    }
+    return { totalPayableNow: Math.round(total * 100) / 100, dueEmployeeIds: due };
   }, [activeEmployees, todayStr, salaryPayments, attendance, salaryAdvances, salaryAdjustments]);
 
-  // --- SELECTED EMPLOYEE & CYCLE CALCULATIONS ---
+  const activeShifts = useMemo(() => shifts.filter(s => !s.deleted_at), [shifts]);
+
+  // --- SELECTED EMPLOYEE & CYCLE ---
   const cycleAttendance = useMemo(() => {
     if (!selectedEmployee || !selectedCycle) return null;
     return calculateCycleAttendance(selectedEmployee, selectedCycle, attendance, todayStr);
   }, [selectedEmployee, selectedCycle, attendance, todayStr]);
 
-  // Advances in selected cycle
+  // Advances in the selected cycle (Debt records are not advances)
   const cycleAdvances = useMemo(() => {
     if (!selectedEmployee || !selectedCycle) return [];
     return salaryAdvances.filter(a => {
       const d = a.transactionDate || a.date;
-      return a.employeeId === selectedEmployee.id && !a.deleted_at && d >= selectedCycle.startDate && d <= selectedCycle.endDate;
+      return a.employeeId === selectedEmployee.id && !a.deleted_at && a.kind !== 'debt' && a.status !== 'Voided'
+        && d >= selectedCycle.startDate && d <= selectedCycle.endDate;
     });
   }, [selectedEmployee, selectedCycle, salaryAdvances]);
 
-  const cycleAdvancesTotal = useMemo(() => {
-    return cycleAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-  }, [cycleAdvances]);
+  const cycleAdvancesTotal = useMemo(() => cycleAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0), [cycleAdvances]);
 
-  // Prior open advances (carried forward)
+  // Debt brought in: open balances from earlier cycles (the existing carry-forward, incl. Debt records)
   const priorAdvances = useMemo(() => {
     if (!selectedEmployee || !selectedCycle) return [];
     return salaryAdvances.filter(a => {
@@ -367,160 +342,114 @@ const Staff = () => {
     return priorAdvances.reduce((sum, a) => sum + Math.max(0, a.amount - (a.deducted_amount || 0)), 0);
   }, [priorAdvances]);
 
-  // Outstanding Borrows for employee
+  // Outstanding borrows for employee
   const outstandingBorrows = useMemo(() => {
     if (!selectedEmployee) return [];
-    return borrows.filter(b => b.employeeId === selectedEmployee.id && b.status !== 'settled' && !b.deleted_at);
+    return borrows.filter(b => b.employeeId === selectedEmployee.id && b.status !== 'settled' && b.status !== 'Voided' && !b.deleted_at);
   }, [selectedEmployee, borrows]);
 
-  const totalOutstandingBorrows = useMemo(() => {
-    return outstandingBorrows.reduce((sum, b) => sum + Math.max(0, b.amount - (b.repaid_amount || 0)), 0);
-  }, [outstandingBorrows]);
-
-  // Employee Adjustments
-  const employeeAdjustments = useMemo(() => {
+  const openAdjustments = useMemo(() => {
     if (!selectedEmployee) return [];
-    return (salaryAdjustments || []).filter(a => a.employeeId === selectedEmployee.id && !a.deleted_at);
+    return (salaryAdjustments || []).filter(a => a.employeeId === selectedEmployee.id && !a.deleted_at && a.status === 'Open');
   }, [selectedEmployee, salaryAdjustments]);
 
-  const openAdjustments = useMemo(() => {
-    return employeeAdjustments.filter(a => a.status === 'Open');
-  }, [employeeAdjustments]);
+  const openAdjustmentsTotal = useMemo(() => openAdjustments.reduce((sum, a) => sum + Number(a.amount || 0), 0), [openAdjustments]);
 
-  const openAdjustmentsTotal = useMemo(() => {
-    return openAdjustments.reduce((sum, a) => sum + Number(a.amount || 0), 0);
-  }, [openAdjustments]);
+  // Debt still owed (open Debt records), shown as a badge on the employee header
+  const employeeDebt = useMemo(() => {
+    if (!selectedEmployee) return 0;
+    return salaryAdvances
+      .filter(a => a.employeeId === selectedEmployee.id && a.kind === 'debt' && a.status === 'Open' && !a.deleted_at)
+      .reduce((sum, a) => sum + Math.max(0, a.amount - (a.deducted_amount || 0)), 0);
+  }, [selectedEmployee, salaryAdvances]);
 
-  // Financial summary for selected cycle
-  const cycleFinancials = useMemo(() => {
+  // Money owed by employees after final settlement (open balance per employee)
+  const owedByEmployee = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of salaryAdvances) {
+      if (a.owedByEmployee && a.status === 'Open' && !a.deleted_at) {
+        m.set(a.employeeId, (m.get(a.employeeId) || 0) + Math.max(0, a.amount - (a.deducted_amount || 0)));
+      }
+    }
+    return m;
+  }, [salaryAdvances]);
+
+  const selectedOwedDebts = useMemo(() => {
+    if (!selectedEmployee) return [];
+    return salaryAdvances.filter(a => a.employeeId === selectedEmployee.id && a.owedByEmployee && !a.deleted_at && a.status !== 'Voided');
+  }, [selectedEmployee, salaryAdvances]);
+
+  const selectedAuditLog = useMemo(() => {
+    if (!selectedEmployee) return [];
+    return (salaryAuditLog || []).filter(e => e.employeeId === selectedEmployee.id);
+  }, [selectedEmployee, salaryAuditLog]);
+
+  // Salary figures for the selected cycle: the paid snapshot for paid cycles, live otherwise
+  const salaryView = useMemo(() => {
     if (!selectedEmployee || !selectedCycle || !cycleAttendance) return null;
-    return calculateCycleFinancials(
+    const p = selectedCycle.status === 'Paid' ? selectedCycle.payment : null;
+    if (p) {
+      const debtIn = (p.debtInLines || []).reduce((s, l) => s + l.amount, 0);
+      return {
+        isPaid: true,
+        perDay: p.perDay || 0,
+        deduction: p.attendanceDeduction || 0,
+        earned: p.earnedAmount ?? p.gross,
+        advances: Math.max(0, (p.advance_deducted || 0) - debtIn),
+        debtIn,
+        borrow: p.borrow_deducted || 0,
+        payable: p.payableAmount ?? p.net_paid,
+        debtOut: p.payBasisDays ? Number(p.carriedForwardAdvanceOut || 0) : 0,
+      };
+    }
+    const fin = calculateCycleFinancials(
       selectedEmployee.monthlySalary,
       selectedCycle.cycleDays,
       cycleAttendance.deductedDays,
       cycleAdvancesTotal,
       priorAdvancesTotal,
-      0, // borrow recovery requires explicit selection in payout modal
+      0, // borrow recovery is chosen in the payout window
       openAdjustmentsTotal
     );
+    return {
+      isPaid: false,
+      perDay: fin.perDayAmount,
+      deduction: fin.deductionAmount,
+      earned: fin.earnedAmount,
+      advances: fin.thisCycleAdvances,
+      debtIn: fin.carriedForwardAdvanceIn,
+      borrow: 0,
+      payable: fin.payable,
+      debtOut: fin.carriedForwardAdvanceOut,
+    };
   }, [selectedEmployee, selectedCycle, cycleAttendance, cycleAdvancesTotal, priorAdvancesTotal, openAdjustmentsTotal]);
 
-  // Calendar cells generation for viewDate month
-  const daysInViewMonth = useMemo(() => {
-    return new Date(year, month + 1, 0).getDate();
-  }, [year, month]);
-
-  const calendarCells = useMemo(() => {
-    const firstDayIdx = new Date(year, month, 1).getDay(); // 0 = Sunday
-    const cells: Array<{ dayNumber: number; dateStr: string; isSunday: boolean } | null> = [];
-    
-    for (let i = 0; i < firstDayIdx; i++) {
-      cells.push(null);
-    }
-    
-    for (let d = 1; d <= daysInViewMonth; d++) {
-      const dateStr = `${currentMonthStr}-${String(d).padStart(2, '0')}`;
-      const dayOfWeek = new Date(year, month, d).getDay();
-      cells.push({
-        dayNumber: d,
-        dateStr,
-        isSunday: dayOfWeek === 0
-      });
-    }
-    return cells;
-  }, [year, month, daysInViewMonth, currentMonthStr]);
-
-  // Month navigation handlers
-  const handlePrevMonth = () => {
-    setViewDate(new Date(year, month - 1, 1));
-  };
-
-  const handleNextMonth = () => {
-    setViewDate(new Date(year, month + 1, 1));
-  };
-
-  const handleGoToDate = (e: ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    if (val) {
-      const d = new Date(val);
-      if (!isNaN(d.getTime())) {
-        setViewDate(new Date(d.getFullYear(), d.getMonth(), 1));
-        setSelectedDayStr(val);
-      }
-    }
-  };
-
-  // Toggle day attendance through: Present -> Absent -> Paid Leave -> Unpaid Leave -> Present
-  const handleDayAttendanceToggle = (dateStr: string) => {
+  // Mark / unmark one day from the attendance grid popup
+  const handleMarkDay = (dateStr: string, status: AttendanceMark | null) => {
     if (!selectedEmployee) return;
-    if (dateStr < selectedEmployee.joiningDate) {
-      toast.error(`Cannot mark attendance before joining date (${formatDDMMYYYY(selectedEmployee.joiningDate)})`);
+    if (dateStr < selectedEmployee.joiningDate || dateStr > todayStr) {
+      toast.error('Only days from joining up to today can be marked.');
       return;
     }
-    if (dateStr > todayStr) {
-      toast.error('Cannot mark attendance for future dates');
-      return;
+    markAttendance(selectedEmployee.id, dateStr, status);
+    if (selectedCycle?.status === 'Paid') {
+      toast.info('This cycle is already paid: any change in pay is added as an adjustment to the next payout.');
     }
-
-    const currentRecord = attendance.find(a => a.employeeId === selectedEmployee.id && a.date === dateStr && !a.deleted_at);
-    const currentStatus = currentRecord?.status;
-
-    let nextStatus: 'Present' | 'Absent' | 'Paid Leave' | 'Unpaid Leave';
-    if (!currentStatus) {
-      nextStatus = 'Present';
-    } else if (currentStatus === 'Present') {
-      nextStatus = 'Absent';
-    } else if (currentStatus === 'Absent') {
-      nextStatus = 'Paid Leave';
-    } else if (currentStatus === 'Paid Leave') {
-      nextStatus = 'Unpaid Leave';
-    } else {
-      nextStatus = 'Present';
-    }
-
-    markAttendance(selectedEmployee.id, dateStr, nextStatus);
   };
 
-  // Day detail attendance status & transactions on selectedDayStr
-  const selectedDayAttendanceStatus = useMemo(() => {
-    if (!selectedEmployee) return null;
-    return attendance.find(a => a.employeeId === selectedEmployee.id && a.date === selectedDayStr && !a.deleted_at)?.status || null;
-  }, [selectedEmployee, attendance, selectedDayStr]);
-
-  const selectedDayAdvances = useMemo(() => {
-    if (!selectedEmployee) return [];
-    return salaryAdvances.filter(a => {
-      const d = a.transactionDate || a.date;
-      return a.employeeId === selectedEmployee.id && !a.deleted_at && d === selectedDayStr;
-    });
-  }, [selectedEmployee, salaryAdvances, selectedDayStr]);
-
-  const selectedDayBorrows = useMemo(() => {
-    if (!selectedEmployee) return [];
-    return borrows.filter(b => {
-      const d = b.transactionDate || b.date;
-      return b.employeeId === selectedEmployee.id && !b.deleted_at && d === selectedDayStr;
-    });
-  }, [selectedEmployee, borrows, selectedDayStr]);
-
-  // Range Check calculated stats
-  const rangeCheckStats = useMemo(() => {
-    if (!selectedEmployee || !rangeFrom || !rangeTo) {
-      return { present: 0, absent: 0, paidLeave: 0, unpaidLeave: 0, advances: 0, borrows: 0 };
+  // All Present: only employees still unmarked today, after confirming the count
+  const handleAllPresent = () => {
+    const count = activeEmployees.filter(e =>
+      todayStr >= e.joiningDate && !attendance.some(a => a.employeeId === e.id && a.date === todayStr && !a.deleted_at)
+    ).length;
+    if (count === 0) {
+      toast.info(`Everyone is already marked for ${formatDDMMYYYY(todayStr)}.`);
+      return;
     }
-    const empAtt = attendance.filter(a => a.employeeId === selectedEmployee.id && !a.deleted_at && a.date >= rangeFrom && a.date <= rangeTo);
-    const present = empAtt.filter(a => a.status === 'Present').length;
-    const absent = empAtt.filter(a => a.status === 'Absent').length;
-    const paidLeave = empAtt.filter(a => a.status === 'Paid Leave').length;
-    const unpaidLeave = empAtt.filter(a => a.status === 'Unpaid Leave').length;
-    const advs = salaryAdvances
-      .filter(a => a.employeeId === selectedEmployee.id && !a.deleted_at && (a.transactionDate || a.date) >= rangeFrom && (a.transactionDate || a.date) <= rangeTo)
-      .reduce((s, a) => s + (Number(a.amount) || 0), 0);
-    const brws = borrows
-      .filter(b => b.employeeId === selectedEmployee.id && !b.deleted_at && (b.transactionDate || b.date) >= rangeFrom && (b.transactionDate || b.date) <= rangeTo)
-      .reduce((s, b) => s + (Number(b.amount) || 0), 0);
-    return { present, absent, paidLeave, unpaidLeave, advances: advs, borrows: brws };
-  }, [selectedEmployee, attendance, salaryAdvances, borrows, rangeFrom, rangeTo]);
+    if (!window.confirm(`Mark ${count} unmarked staff member${count === 1 ? '' : 's'} as Present for ${formatDDMMYYYY(todayStr)}?`)) return;
+    const marked = markAllPresent(todayStr);
+    toast.success(`Marked ${marked} as Present for ${formatDDMMYYYY(todayStr)}`);
+  };
 
   // Role & Shift display helpers
   const getRoleName = (roleId: string) => {
@@ -529,7 +458,7 @@ const Staff = () => {
 
   const getShiftName = (shiftId?: string) => {
     if (!shiftId) return 'Regular';
-    return shifts.find(s => s.id === shiftId)?.name || 'Regular';
+    return formatShiftLabel(shifts.find(s => s.id === shiftId));
   };
 
   // Check admin role
@@ -546,80 +475,72 @@ const Staff = () => {
     <div className="animate-fade-in space-y-6">
       
       {/* ============================================================== */}
-      {/* 1. TOP HEADER & STATS CARDS (Matching Dashboard)              */}
+      {/* 1. TODAY'S STATS + ALL PRESENT                                 */}
       {/* ============================================================== */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-foreground">Staff Management</h2>
-          <p className="text-xs text-muted-foreground">Manage employees, daily attendance, advances, borrows, and cycle payouts.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              markAllPresent(todayStr);
-              toast.success(`Marked all active staff as Present for ${formatDDMMYYYY(todayStr)}`);
-            }}
-            className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-4 py-2 rounded-lg font-bold text-sm transition-all shadow-sm active:scale-95"
-            title="Mark all active staff members as Present for today"
-          >
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span>All Present</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Top Stats Cards matching Dashboard */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div className="stat-card">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold">Total Staff</p>
-              <p className="text-3xl font-bold text-foreground">{activeEmployees.length}</p>
+      <div className="flex flex-col lg:flex-row gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 flex-1">
+          <div className="stat-card">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Total Staff</p>
+                <p className="text-3xl font-bold text-foreground">{activeEmployees.length}</p>
+              </div>
+              <Users className="w-8 h-8 opacity-30 text-foreground" />
             </div>
-            <Users className="w-8 h-8 opacity-30 text-foreground" />
+          </div>
+
+          <div className="stat-card hover:border-emerald-500/50">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Present Today</p>
+                <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+                  {todayCounts.present}
+                  {todayCounts.halfDay > 0 && <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 ml-2">+{todayCounts.halfDay} half</span>}
+                </p>
+              </div>
+              <Check className="w-8 h-8 opacity-30 text-emerald-600 dark:text-emerald-400" />
+            </div>
+          </div>
+
+          <div className="stat-card hover:border-destructive/50">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Absent Today</p>
+                <p className="text-3xl font-bold text-destructive">{todayCounts.absent}</p>
+              </div>
+              <X className="w-8 h-8 opacity-30 text-destructive" />
+            </div>
+          </div>
+
+          <div className="stat-card hover:border-amber-500/50">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Not Marked</p>
+                <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">{todayCounts.notMarked}</p>
+              </div>
+              <Clock className="w-8 h-8 opacity-30 text-amber-600 dark:text-amber-400" />
+            </div>
+          </div>
+
+          <div className="stat-card hover:border-primary/50">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Payable Now</p>
+                <p className="text-3xl font-bold text-foreground">₹{totalPayableNow.toLocaleString('en-IN')}</p>
+              </div>
+              <DollarSign className="w-8 h-8 opacity-30 text-foreground" />
+            </div>
           </div>
         </div>
 
-        <div className="stat-card hover:border-emerald-500/50">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold">Present Today</p>
-              <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">{presentTodayCount}</p>
-            </div>
-            <Check className="w-8 h-8 opacity-30 text-emerald-600 dark:text-emerald-400" />
-          </div>
-        </div>
-
-        <div className="stat-card hover:border-destructive/50">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold">Absent Today</p>
-              <p className="text-3xl font-bold text-destructive">{absentTodayCount}</p>
-            </div>
-            <X className="w-8 h-8 opacity-30 text-destructive" />
-          </div>
-        </div>
-
-        <div className="stat-card hover:border-amber-500/50">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold">Not Marked</p>
-              <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">{notMarkedTodayCount}</p>
-            </div>
-            <Clock className="w-8 h-8 opacity-30 text-amber-600 dark:text-amber-400" />
-          </div>
-        </div>
-
-        {/* PRD Section 9: Top card "Payable now" */}
-        <div className="stat-card hover:border-primary/50">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold">Payable Now</p>
-              <p className="text-3xl font-bold text-foreground">₹{totalPayableNow.toLocaleString('en-IN')}</p>
-            </div>
-            <DollarSign className="w-8 h-8 opacity-30 text-foreground" />
-          </div>
-        </div>
+        <button
+          onClick={handleAllPresent}
+          className="flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95"
+          title="Mark every staff member still unmarked today as Present"
+        >
+          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          <span>All Present</span>
+        </button>
       </div>
 
       {/* ============================================================== */}
@@ -630,12 +551,16 @@ const Staff = () => {
         {/* ------------------------------------------------------------ */}
         {/* LEFT PANEL (4 cols): Staff Members List                      */}
         {/* ------------------------------------------------------------ */}
-        <div className="lg:col-span-4 space-y-4">
+        <div className="lg:col-span-4 xl:col-span-3 space-y-4">
           <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-bold text-foreground">Staff Members</h3>
-                <p className="text-xs text-muted-foreground">{filteredEmployees.length} registered</p>
+                <p className="text-xs text-muted-foreground">{filteredEmployees.length} {showFormerStaff ? 'incl. former staff' : 'registered'}</p>
+                <label className="flex items-center gap-1.5 mt-1 text-[11px] text-muted-foreground cursor-pointer select-none">
+                  <input type="checkbox" checked={showFormerStaff} onChange={e => setShowFormerStaff(e.target.checked)} className="rounded border-border" />
+                  Show former staff
+                </label>
               </div>
               {/* Double plus bug fix: "Add Staff" instead of "+ Add Staff" */}
               <button
@@ -671,8 +596,7 @@ const Staff = () => {
               ) : (
                 filteredEmployees.map(emp => {
                   const isSelected = emp.id === selectedEmpId;
-                  const empCycles = generateEmployeeCycles(emp, todayStr, salaryPayments, attendance);
-                  const hasDue = empCycles.some(c => c.status === 'Due');
+                  const hasDue = dueEmployeeIds.has(emp.id);
 
                   return (
                     <div
@@ -687,6 +611,12 @@ const Staff = () => {
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-sm">{emp.name}</span>
+                          {emp.status === 'inactive' && (
+                            <span className="text-[9px] font-bold px-1.5 rounded-full bg-secondary text-muted-foreground border border-border">Inactive</span>
+                          )}
+                          {(owedByEmployee.get(emp.id) || 0) > 0 && (
+                            <span className="text-[9px] font-bold px-1.5 rounded-full bg-destructive/15 text-destructive border border-destructive/30">Owes {formatRs(owedByEmployee.get(emp.id) || 0)}</span>
+                          )}
                           {hasDue && (
                             <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
                               isSelected ? 'bg-amber-400 text-black' : 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30'
@@ -744,13 +674,13 @@ const Staff = () => {
         </div>
 
         {/* ------------------------------------------------------------ */}
-        {/* RIGHT PANEL (8 cols): Selected Employee & Calendar          */}
+        {/* RIGHT PANEL: selected employee, cycle attendance, salary      */}
         {/* ------------------------------------------------------------ */}
-        <div className="lg:col-span-8 space-y-6">
+        <div className="lg:col-span-8 xl:col-span-9 space-y-4">
           {selectedEmployee ? (
             <>
               {/* Employee Detail Header Card */}
-              <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
+              <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-3">
@@ -758,9 +688,19 @@ const Staff = () => {
                       <span className="text-xs font-semibold uppercase px-2.5 py-0.5 rounded-full bg-secondary text-secondary-foreground border border-border">
                         {getRoleName(selectedEmployee.roleId)}
                       </span>
+                      {selectedEmployee.status === 'inactive' && (
+                        <span className="text-xs font-bold uppercase px-2.5 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border">
+                          Inactive{selectedEmployee.lastWorkingDate ? ' since ' + formatDDMMYYYY(selectedEmployee.lastWorkingDate) : ''}
+                        </span>
+                      )}
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary/50 border border-border text-muted-foreground">
                         {getShiftName(selectedEmployee.shiftId)}
                       </span>
+                      {employeeDebt > 0 && (
+                        <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/30" title="Debt carried forward from earlier payouts">
+                          Debt: {formatRs(employeeDebt)}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
                       <span className="font-semibold text-foreground">
@@ -789,33 +729,6 @@ const Staff = () => {
                     </button>
 
                     <button
-                      onClick={() => setShowAdvanceModal(true)}
-                      className="flex items-center gap-1.5 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-                      title="Record an Advance for this staff member"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Advance</span>
-                    </button>
-
-                    <button
-                      onClick={() => setShowBorrowModal(true)}
-                      className="flex items-center gap-1.5 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-                      title="Record a Borrow for this staff member"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Borrow</span>
-                    </button>
-
-                    <button
-                      onClick={() => setShowAdjustmentModal(true)}
-                      className="flex items-center gap-1.5 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-                      title="Add a manual salary adjustment (+/-)"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Adjustment</span>
-                    </button>
-
-                    <button
                       onClick={() => setShowSalarySlipModal(true)}
                       className="flex items-center gap-1.5 bg-secondary hover:bg-secondary/80 text-secondary-foreground px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border border-border"
                       title="Print or Export Salary Slip for this cycle"
@@ -840,7 +753,7 @@ const Staff = () => {
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Reverse Payout</span>
                       </button>
-                    ) : (
+                    ) : selectedEmployee.status === 'active' && (
                       <button
                         onClick={() => setShowPayoutModal(true)}
                         className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-sm"
@@ -851,6 +764,7 @@ const Staff = () => {
                       </button>
                     )}
 
+                    {selectedEmployee.status === 'active' && (
                     <button
                       onClick={() => setShowFinalSettlementModal(true)}
                       className="flex items-center gap-1.5 border border-border hover:bg-secondary text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-lg text-xs transition-colors"
@@ -858,12 +772,21 @@ const Staff = () => {
                     >
                       <span>Final Settlement</span>
                     </button>
+                    )}
                   </div>
                 </div>
 
+              </div>
+
+              {selectedOwedDebts.length > 0 && (
+                <OwedByEmployeeCard debts={selectedOwedDebts} auditLog={selectedAuditLog} onResolve={resolveOwedDebt} />
+              )}
+
+              {/* Attendance for the selected salary cycle */}
+              <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
                 {/* PRD Section 1 & 9: SALARY CYCLE SWITCHER BAR */}
                 {selectedCycle && (
-                  <div className="pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-xs bg-secondary/20 p-3 rounded-xl border border-border">
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-secondary/20 p-3 rounded-xl border border-border">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-foreground">Salary Cycle:</span>
                       
@@ -940,429 +863,60 @@ const Staff = () => {
                   </div>
                 )}
 
-                {/* Date / Month Navigation Bar */}
-                <div className="pt-2 flex flex-wrap items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handlePrevMonth}
-                      className="p-1 rounded-lg border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-                      title="Previous Month"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-                    <span className="font-bold text-sm text-foreground px-2 min-w-[130px] text-center">
-                      {viewDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
-                    </span>
-                    <button
-                      onClick={handleNextMonth}
-                      className="p-1 rounded-lg border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-                      title="Next Month"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                {selectedCycle && (
+                  <CycleAttendanceGrid
+                    employee={selectedEmployee}
+                    cycle={selectedCycle}
+                    attendance={attendance}
+                    todayStr={todayStr}
+                    onMark={handleMarkDay}
+                  />
+                )}
+              </div>
 
-                    <div className="ml-2 flex items-center gap-1.5">
-                      <span className="text-muted-foreground">Go to date:</span>
-                      <input
-                        type="date"
-                        value={selectedDayStr}
-                        onChange={handleGoToDate}
-                        className="px-2 py-1 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-                      />
-                    </div>
-                  </div>
-
-                  {/* PRD Section 9: Weekly Off Label cleanup (remove & Planning Notes) */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-foreground font-medium">
-                    <input
-                      type="checkbox"
-                      checked={showWeeklyOff}
-                      onChange={e => setShowWeeklyOff(e.target.checked)}
-                      className="rounded border-border text-primary focus:ring-0"
+              {/* Summary row */}
+              {cycleAttendance && salaryView && (
+                <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 items-stretch">
+                  <div className="xl:col-span-3">
+                    <AttendanceSummaryTiles
+                      present={cycleAttendance.presentDays}
+                      halfDays={cycleAttendance.halfDays}
+                      absent={cycleAttendance.absentDays}
+                      notMarked={cycleAttendance.notMarkedDays}
                     />
-                    <span>Show Weekly Off (Sun)</span>
-                  </label>
-                </div>
-              </div>
-
-              {/* Calendar Grid (Sun-Sat) */}
-              <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
-                <div className="grid grid-cols-7 gap-2 text-center text-xs font-bold text-muted-foreground uppercase tracking-wider pb-2 border-b border-border">
-                  <span className="text-destructive">Sun</span>
-                  <span>Mon</span>
-                  <span>Tue</span>
-                  <span>Wed</span>
-                  <span>Thu</span>
-                  <span>Fri</span>
-                  <span>Sat</span>
-                </div>
-
-                <div className="grid grid-cols-7 gap-2">
-                  {calendarCells.map((cell, idx) => {
-                    if (!cell) {
-                      return <div key={`empty-${idx}`} className="h-20 bg-muted/10 rounded-xl border border-dashed border-border/40" />;
-                    }
-
-                    const isSelectedDay = cell.dateStr === selectedDayStr;
-                    const att = attendance.find(a => a.employeeId === selectedEmployee.id && a.date === cell.dateStr && !a.deleted_at)?.status;
-                    const dayAdvances = salaryAdvances.filter(a => {
-                      const d = a.transactionDate || a.date;
-                      return a.employeeId === selectedEmployee.id && !a.deleted_at && d === cell.dateStr;
-                    });
-                    const dayAdvSum = dayAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0);
-
-                    // Cycle markers
-                    const isCycleStart = selectedCycle && cell.dateStr === selectedCycle.startDate;
-                    const isCycleEnd = selectedCycle && cell.dateStr === selectedCycle.endDate;
-                    const isInsideCycle = selectedCycle && cell.dateStr >= selectedCycle.startDate && cell.dateStr <= selectedCycle.endDate;
-                    const isAllowedToMark = cell.dateStr >= selectedEmployee.joiningDate && cell.dateStr <= todayStr;
-
-                    return (
-                      <div
-                        key={cell.dateStr}
-                        onClick={() => {
-                          setSelectedDayStr(cell.dateStr);
-                          handleDayAttendanceToggle(cell.dateStr);
-                        }}
-                        className={`h-20 p-1.5 rounded-xl border flex flex-col justify-between transition-all cursor-pointer relative ${
-                          isSelectedDay
-                            ? 'bg-primary text-primary-foreground border-primary shadow-md ring-2 ring-primary/30'
-                            : (isInsideCycle ? 'bg-card hover:bg-secondary/50 border-primary/40' : 'bg-card/70 hover:bg-secondary/40 border-border')
-                        } ${!isAllowedToMark ? 'opacity-80' : ''}`}
-                        title={!isAllowedToMark ? `Cannot mark before joining date or in future` : `Click to toggle attendance status for ${formatDDMMYYYY(cell.dateStr)}`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className={`text-xs font-bold ${
-                            isSelectedDay ? 'text-primary-foreground' : (cell.isSunday ? 'text-destructive' : 'text-foreground')
-                          }`}>
-                            {cell.dayNumber}
-                          </span>
-
-                          <div className="flex items-center gap-1">
-                            {/* PRD Section 9: Cycle Start / End Indicators */}
-                            {isCycleStart && (
-                              <span className={`text-[8px] font-bold px-1 rounded ${
-                                isSelectedDay ? 'bg-primary-foreground text-primary' : 'bg-primary text-primary-foreground'
-                              }`}>
-                                Start
-                              </span>
-                            )}
-                            {isCycleEnd && (
-                              <span className={`text-[8px] font-bold px-1 rounded ${
-                                isSelectedDay ? 'bg-primary-foreground text-primary' : 'bg-primary text-primary-foreground'
-                              }`}>
-                                End
-                              </span>
-                            )}
-
-                            {/* Weekly off chip on Sundays */}
-                            {showWeeklyOff && cell.isSunday && (
-                              <span className={`text-[9px] font-semibold px-1 rounded ${
-                                isSelectedDay ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30'
-                              }`}>
-                                Off
-                              </span>
-                            )}
-
-                            {/* Attendance Status Mark Pill */}
-                            {att && (
-                              <span className={`px-1.5 py-0.5 rounded-md font-bold text-[9px] flex items-center justify-center ${
-                                att === 'Present'
-                                  ? (isSelectedDay ? 'bg-primary-foreground text-primary' : 'bg-emerald-600 text-white')
-                                  : att === 'Absent'
-                                  ? (isSelectedDay ? 'bg-primary-foreground text-destructive' : 'bg-destructive text-destructive-foreground')
-                                  : att === 'Paid Leave'
-                                  ? (isSelectedDay ? 'bg-primary-foreground text-blue-600' : 'bg-blue-600 text-white')
-                                  : (isSelectedDay ? 'bg-primary-foreground text-amber-600' : 'bg-amber-600 text-white')
-                              }`}>
-                                {att === 'Present' ? 'P' : (att === 'Absent' ? 'A' : (att === 'Paid Leave' ? 'PL' : 'UL'))}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Advance on this date */}
-                        {dayAdvSum > 0 && (
-                          <div className={`mt-auto text-[9px] font-semibold px-1 py-0.5 rounded truncate text-center ${
-                            isSelectedDay ? 'bg-primary-foreground/20 text-primary-foreground font-bold' : 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30'
-                          }`}>
-                            Adv: ₹{dayAdvSum}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Cycle Summary Strip */}
-                {cycleAttendance && cycleFinancials && (
-                  <div className="pt-4 border-t border-border grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
-                    <div className="bg-secondary/40 border border-border p-2.5 rounded-xl">
-                      <p className="text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">Present</p>
-                      <p className="text-base font-bold text-emerald-600 dark:text-emerald-400">{cycleAttendance.presentDays}</p>
-                    </div>
-                    <div className="bg-secondary/40 border border-border p-2.5 rounded-xl">
-                      <p className="text-[10px] uppercase tracking-wider text-destructive font-semibold">Absent</p>
-                      <p className="text-base font-bold text-destructive">{cycleAttendance.absentDays}</p>
-                    </div>
-                    <div className="bg-secondary/40 border border-border p-2.5 rounded-xl">
-                      <p className="text-[10px] uppercase tracking-wider text-blue-600 dark:text-blue-400 font-semibold">Paid Leave</p>
-                      <p className="text-base font-bold text-blue-600 dark:text-blue-400">{cycleAttendance.paidLeaveDays}</p>
-                    </div>
-                    <div className="bg-secondary/40 border border-border p-2.5 rounded-xl">
-                      <p className="text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-semibold">Unpaid Leave</p>
-                      <p className="text-base font-bold text-amber-600 dark:text-amber-400">{cycleAttendance.unpaidLeaveDays}</p>
-                    </div>
-                    <div className="bg-secondary/40 border border-border p-2.5 rounded-xl">
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Cycle Advances</p>
-                      <p className="text-base font-bold text-foreground">₹{cycleAdvancesTotal.toLocaleString('en-IN')}</p>
-                    </div>
-                    <div className="bg-secondary/40 border border-border p-2.5 rounded-xl">
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Cycle Net</p>
-                      <p className="text-base font-bold text-foreground">₹{cycleFinancials.netPayable.toLocaleString('en-IN')}</p>
-                    </div>
                   </div>
-                )}
-
-                {/* PRD Section 9: Clean Formula Line (remove Sum parity badge) */}
-                {selectedCycle && cycleFinancials && (
-                  <div className="bg-secondary/30 border border-border p-3 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                    <div className="flex flex-wrap items-center gap-1.5 font-medium text-muted-foreground">
-                      <span>Salary ₹{selectedEmployee.monthlySalary.toLocaleString('en-IN')}</span>
-                      <span>-</span>
-                      <span>Deductions ₹{cycleFinancials.deductionAmount.toLocaleString('en-IN')}</span>
-                      <span>-</span>
-                      <span>Advances ₹{cycleFinancials.advanceDeducted.toLocaleString('en-IN')}</span>
-                      {openAdjustmentsTotal !== 0 && (
-                        <>
-                          <span>{openAdjustmentsTotal >= 0 ? '+' : '-'}</span>
-                          <span>Adjustments ₹{Math.abs(openAdjustmentsTotal).toLocaleString('en-IN')}</span>
-                        </>
-                      )}
-                      <span>=</span>
-                      <span className="font-bold text-foreground">Net ₹{cycleFinancials.netPayable.toLocaleString('en-IN')}</span>
-                    </div>
-
-                    {selectedCycle.payment && (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                        Paid on {formatDDMMYYYY(selectedCycle.payment.paid_on)}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* ------------------------------------------------------------ */}
-              {/* Day Detail Card & Range Check Card Grid                     */}
-              {/* ------------------------------------------------------------ */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-                {/* Day Detail Card */}
-                <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h4 className="font-bold text-sm text-foreground">Day Details: {formatDDMMYYYY(selectedDayStr)}</h4>
-                      <p className="text-xs text-muted-foreground">Attendance & transactions on selected date</p>
-                    </div>
-
-                    {/* PRD Section 2: 4 Attendance Status Buttons */}
-                    <div className="flex flex-wrap items-center gap-1">
-                      <button
-                        onClick={() => markAttendance(selectedEmployee.id, selectedDayStr, 'Present')}
-                        className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all ${
-                          selectedDayAttendanceStatus === 'Present'
-                            ? 'bg-emerald-600 text-white shadow-sm'
-                            : 'bg-secondary hover:bg-emerald-500/20 text-muted-foreground hover:text-emerald-600 dark:hover:text-emerald-400 border border-border'
-                        }`}
-                      >
-                        <Check className="w-3 h-3" />
-                        <span>Present</span>
-                      </button>
-
-                      <button
-                        onClick={() => markAttendance(selectedEmployee.id, selectedDayStr, 'Absent')}
-                        className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all ${
-                          selectedDayAttendanceStatus === 'Absent'
-                            ? 'bg-destructive text-destructive-foreground shadow-sm'
-                            : 'bg-secondary hover:bg-destructive/20 text-muted-foreground hover:text-destructive border border-border'
-                        }`}
-                      >
-                        <X className="w-3 h-3" />
-                        <span>Absent</span>
-                      </button>
-
-                      <button
-                        onClick={() => markAttendance(selectedEmployee.id, selectedDayStr, 'Paid Leave')}
-                        className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all ${
-                          selectedDayAttendanceStatus === 'Paid Leave'
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-secondary hover:bg-blue-500/20 text-muted-foreground hover:text-blue-600 dark:hover:text-blue-400 border border-border'
-                        }`}
-                      >
-                        <span>Paid Leave</span>
-                      </button>
-
-                      <button
-                        onClick={() => markAttendance(selectedEmployee.id, selectedDayStr, 'Unpaid Leave')}
-                        className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all ${
-                          selectedDayAttendanceStatus === 'Unpaid Leave'
-                            ? 'bg-amber-600 text-white shadow-sm'
-                            : 'bg-secondary hover:bg-amber-500/20 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 border border-border'
-                        }`}
-                      >
-                        <span>Unpaid Leave</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Advances on this Date */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-foreground">Advances on this Date:</span>
-                      <button
-                        onClick={() => setShowAdvanceModal(true)}
-                        className="text-xs font-semibold text-primary hover:underline transition-colors"
-                      >
-                        + Record Advance
-                      </button>
-                    </div>
-
-                    {selectedDayAdvances.length === 0 ? (
-                      <p className="text-xs text-muted-foreground bg-secondary/20 p-2.5 rounded-lg border border-dashed border-border">
-                        No advances recorded on this date.
-                      </p>
-                    ) : (
-                      selectedDayAdvances.map(adv => (
-                        <div key={adv.id} className="p-2.5 bg-secondary/30 rounded-lg border border-border flex items-center justify-between text-xs">
-                          <div>
-                            <span className="font-bold text-foreground">₹{adv.amount}</span>
-                            {adv.reason && <span className="text-muted-foreground ml-2">({adv.reason})</span>}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-muted-foreground">
-                              Status: {adv.status || 'Open'}
-                            </span>
-                            {adv.status === 'Open' && (
-                              <button
-                                onClick={() => {
-                                  if (window.confirm('Delete this advance?')) {
-                                    deleteSalaryAdvance(adv.id);
-                                  }
-                                }}
-                                className="text-destructive hover:text-destructive/80 p-0.5"
-                                title="Delete advance"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  {/* Borrows on this Date */}
-                  <div className="space-y-2 pt-2 border-t border-border">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-foreground">Borrows on this Date:</span>
-                      <button
-                        onClick={() => setShowBorrowModal(true)}
-                        className="text-xs font-semibold text-primary hover:underline transition-colors"
-                      >
-                        + Record Borrow
-                      </button>
-                    </div>
-
-                    {selectedDayBorrows.length === 0 ? (
-                      <p className="text-xs text-muted-foreground bg-secondary/20 p-2.5 rounded-lg border border-dashed border-border">
-                        No borrow entries on this date.
-                      </p>
-                    ) : (
-                      selectedDayBorrows.map(b => (
-                        <div key={b.id} className="p-2.5 bg-secondary/30 rounded-lg border border-border flex items-center justify-between text-xs">
-                          <div>
-                            <span className="font-bold text-foreground">₹{b.amount}</span>
-                            {b.reason && <span className="text-muted-foreground ml-2">({b.reason})</span>}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                              b.status === 'settled' 
-                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' 
-                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                            }`}>
-                              {b.status} (Repaid: ₹{b.repaid_amount || 0})
-                            </span>
-                            {b.status === 'outstanding' && (
-                              <button
-                                onClick={() => {
-                                  if (window.confirm('Delete this borrow entry?')) {
-                                    deleteBorrow(b.id);
-                                  }
-                                }}
-                                className="text-destructive hover:text-destructive/80 p-0.5"
-                                title="Delete borrow"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
+                  <div className="xl:col-span-2">
+                    <SalarySummaryCard
+                      earned={salaryView.earned}
+                      deduction={salaryView.deduction}
+                      advances={salaryView.advances}
+                      debtIn={salaryView.debtIn}
+                      borrow={salaryView.borrow}
+                      payable={salaryView.payable}
+                      debtOut={salaryView.debtOut}
+                      isPaid={salaryView.isPaid}
+                      perDay={salaryView.perDay}
+                    />
                   </div>
                 </div>
+              )}
 
-                {/* Range Check Card */}
-                <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
-                  <div>
-                    <h4 className="font-bold text-sm text-foreground">Range Check</h4>
-                    <p className="text-xs text-muted-foreground">Custom date range attendance & financial summary</p>
-                  </div>
-
-                  {/* Range date pickers */}
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <label className="block text-muted-foreground font-semibold mb-1">From Date</label>
-                      <input
-                        type="date"
-                        value={rangeFrom}
-                        onChange={e => setRangeFrom(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-muted-foreground font-semibold mb-1">To Date</label>
-                      <input
-                        type="date"
-                        value={rangeTo}
-                        onChange={e => setRangeTo(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Range Result Metrics */}
-                  <div className="grid grid-cols-2 gap-3 pt-2">
-                    <div className="p-3 bg-secondary/30 rounded-xl border border-border text-center">
-                      <p className="text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">Present Days</p>
-                      <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{rangeCheckStats.present}</p>
-                    </div>
-                    <div className="p-3 bg-secondary/30 rounded-xl border border-border text-center">
-                      <p className="text-[10px] uppercase tracking-wider text-destructive font-semibold">Absent Days</p>
-                      <p className="text-lg font-bold text-destructive">{rangeCheckStats.absent}</p>
-                    </div>
-                    <div className="p-3 bg-secondary/30 rounded-xl border border-border text-center">
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Advances in Range</p>
-                      <p className="text-lg font-bold text-foreground">₹{rangeCheckStats.advances.toLocaleString('en-IN')}</p>
-                    </div>
-                    <div className="p-3 bg-secondary/30 rounded-xl border border-border text-center">
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Borrows in Range</p>
-                      <p className="text-lg font-bold text-foreground">₹{rangeCheckStats.borrows.toLocaleString('en-IN')}</p>
-                    </div>
-                  </div>
-                </div>
-
-              </div>
+              {selectedCycle && (
+                <AdvancesBorrowsBox
+                  employee={selectedEmployee}
+                  cycle={selectedCycle}
+                  cycleIsPaid={selectedCycle.status === 'Paid'}
+                  salaryAdvances={salaryAdvances}
+                  borrows={borrows}
+                  todayStr={todayStr}
+                  addSalaryAdvance={addSalaryAdvance}
+                  updateSalaryAdvance={updateSalaryAdvance}
+                  deleteSalaryAdvance={deleteSalaryAdvance}
+                  addBorrow={addBorrow}
+                  updateBorrow={updateBorrow}
+                  deleteBorrow={deleteBorrow}
+                />
+              )}
             </>
           ) : (
             <div className="bg-card text-card-foreground rounded-xl p-12 shadow-sm border border-border text-center space-y-3">
@@ -1372,7 +926,6 @@ const Staff = () => {
             </div>
           )}
         </div>
-
       </div>
 
       {/* ============================================================== */}
@@ -1391,6 +944,10 @@ const Staff = () => {
           priorAdvances={priorAdvances}
           outstandingBorrows={outstandingBorrows}
           openAdjustments={openAdjustments}
+          onAddAdjustment={(amount, reason) => {
+            addSalaryAdjustment({ employeeId: selectedEmployee.id, cycleId: selectedCycle.id, amount, reason, type: 'manual' });
+            toast.success('Adjustment added');
+          }}
           onClose={() => setShowPayoutModal(false)}
           onExecute={(payoutData) => {
             const res = executeCyclePayout(payoutData);
@@ -1428,28 +985,6 @@ const Staff = () => {
       )}
 
       {/* ------------------------------------------------------------ */}
-      {/* Salary Adjustment Modal                                      */}
-      {/* ------------------------------------------------------------ */}
-      {showAdjustmentModal && selectedEmployee && (
-        <RecordAdjustmentModal
-          employee={selectedEmployee}
-          cycle={selectedCycle}
-          onClose={() => setShowAdjustmentModal(false)}
-          onSave={(amount, reason) => {
-            addSalaryAdjustment({
-              employeeId: selectedEmployee.id,
-              cycleId: selectedCycle?.id,
-              amount,
-              reason,
-              type: 'manual',
-            });
-            setShowAdjustmentModal(false);
-            toast.success('Salary adjustment recorded');
-          }}
-        />
-      )}
-
-      {/* ------------------------------------------------------------ */}
       {/* Final Settlement Modal (PRD Section 7)                       */}
       {/* ------------------------------------------------------------ */}
       {showFinalSettlementModal && selectedEmployee && selectedCycle && cycleAttendance && (
@@ -1481,7 +1016,8 @@ const Staff = () => {
         <AddEditEmployeeModal
           employee={editingEmployee}
           staffRoles={staffRoles}
-          shifts={shifts}
+          shifts={activeShifts}
+          onManageShifts={() => setShowShiftsModal(true)}
           salaryPayments={salaryPayments}
           vaultStatus={vaultStatus}
           decryptedVaultData={decryptedVaultData}
@@ -1519,49 +1055,6 @@ const Staff = () => {
       )}
 
       {/* ------------------------------------------------------------ */}
-      {/* Record Advance Modal                                         */}
-      {/* ------------------------------------------------------------ */}
-      {showAdvanceModal && selectedEmployee && (
-        <RecordAdvanceModal
-          employee={selectedEmployee}
-          defaultDate={selectedDayStr}
-          cycles={employeeCycles}
-          onClose={() => setShowAdvanceModal(false)}
-          onSave={(amount, date, reason) => {
-            addSalaryAdvance({
-              employeeId: selectedEmployee.id,
-              amount,
-              date,
-              reason
-            });
-            setShowAdvanceModal(false);
-            toast.success('Advance recorded');
-          }}
-        />
-      )}
-
-      {/* ------------------------------------------------------------ */}
-      {/* Record Borrow Modal                                          */}
-      {/* ------------------------------------------------------------ */}
-      {showBorrowModal && selectedEmployee && (
-        <RecordBorrowModal
-          employee={selectedEmployee}
-          defaultDate={selectedDayStr}
-          onClose={() => setShowBorrowModal(false)}
-          onSave={(amount, date, reason) => {
-            addBorrow({
-              employeeId: selectedEmployee.id,
-              amount,
-              date,
-              reason
-            });
-            setShowBorrowModal(false);
-            toast.success('Borrow recorded');
-          }}
-        />
-      )}
-
-      {/* ------------------------------------------------------------ */}
       {/* Salary Slip Modal (PRD Section 8)                            */}
       {/* ------------------------------------------------------------ */}
       {showSalarySlipModal && selectedEmployee && (
@@ -1579,6 +1072,17 @@ const Staff = () => {
           salaryDeductionLedger={salaryDeductionLedger}
           invoiceSettings={invoiceSettings}
           onClose={() => setShowSalarySlipModal(false)}
+        />
+      )}
+
+      {/* Manage Shifts (opened from the Add/Edit Staff shift field) */}
+      {showShiftsModal && (
+        <ManageShiftsModal
+          shifts={shifts}
+          addShift={addShift}
+          updateShift={updateShift}
+          deleteShift={deleteShift}
+          onClose={() => setShowShiftsModal(false)}
         />
       )}
 
@@ -1670,19 +1174,13 @@ const Staff = () => {
 interface CyclePayoutModalProps {
   employee: Employee;
   cycle: SalaryCycle;
-  cycleAttendance: {
-    presentDays: number;
-    absentDays: number;
-    paidLeaveDays: number;
-    unpaidLeaveDays: number;
-    notMarkedDays: number;
-    deductedDays: number;
-    deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave' }>;
-  };
+  cycleAttendance: CycleAttendanceSummary;
   advancesInCycle: SalaryAdvance[];
+  /** Open balances from earlier cycles: the Debt brought in. */
   priorAdvances: SalaryAdvance[];
   outstandingBorrows: BorrowRecord[];
   openAdjustments: SalaryAdjustment[];
+  onAddAdjustment: (amount: number, reason: string) => void;
   onClose: () => void;
   onExecute: (payoutData: any) => void;
 }
@@ -1695,61 +1193,66 @@ const CyclePayoutModal = ({
   priorAdvances,
   outstandingBorrows,
   openAdjustments,
+  onAddAdjustment,
   onClose,
   onExecute
 }: CyclePayoutModalProps) => {
   const monthlySalary = employee.monthlySalary;
-  const cycleDays = cycle.cycleDays;
-  const perDay = cycleDays > 0 ? Math.round((monthlySalary / cycleDays) * 100) / 100 : 0;
 
-  // Deductions from attendance
-  const attendanceDeductionPaise = cycleDays > 0 
-    ? Math.round((monthlySalary * 100 * cycleAttendance.deductedDays) / cycleDays)
-    : 0;
-  const attendanceDeduction = attendanceDeductionPaise / 100;
-  const earnedAmount = Math.max(0, monthlySalary - attendanceDeduction);
-
-  // Advances to deduct (auto: current cycle + carried forward)
   const advancesThisCycleTotal = advancesInCycle.reduce((s, a) => s + (Number(a.amount) || 0), 0);
-  const carriedForwardAdvanceIn = priorAdvances.reduce((s, a) => s + Math.max(0, a.amount - (a.deducted_amount || 0)), 0);
-  const totalAdvancesAvailable = advancesThisCycleTotal + carriedForwardAdvanceIn;
 
-  const advanceDeducted = Math.min(earnedAmount, totalAdvancesAvailable);
-  const carriedForwardAdvanceOut = totalAdvancesAvailable - advanceDeducted;
+  // Debt brought in, line by line ("Debt carried forward from cycle #N")
+  const debtInLines = priorAdvances
+    .map(a => ({
+      id: a.id,
+      label: a.kind === 'debt'
+        ? (a.reason || 'Debt carried forward')
+        : 'Advance brought forward (' + formatDDMMYYYY(a.transactionDate || a.date) + ')',
+      amount: Math.max(0, a.amount - (a.deducted_amount || 0)),
+    }))
+    .filter(l => l.amount > 0);
+  const debtInTotal = debtInLines.reduce((s, l) => s + l.amount, 0);
 
-  // Remaining payable before borrows and adjustments
-  const remainingAfterAdvance = earnedAmount - advanceDeducted;
-
-  // Selected borrow recoveries state (borrowId -> amount)
+  // Selected borrow recoveries (borrowId -> amount)
   const [borrowSelections, setBorrowSelections] = useState<Record<string, { selected: boolean; amount: number }>>(() => {
     const init: Record<string, { selected: boolean; amount: number }> = {};
     for (const b of outstandingBorrows) {
-      const outstanding = Math.max(0, b.amount - (b.repaid_amount || 0));
-      init[b.id] = { selected: false, amount: outstanding };
+      init[b.id] = { selected: false, amount: Math.max(0, b.amount - (b.repaid_amount || 0)) };
     }
     return init;
   });
 
-  const totalBorrowSelected = useMemo(() => {
-    let sum = 0;
-    for (const b of outstandingBorrows) {
-      const s = borrowSelections[b.id];
-      if (s?.selected) {
-        sum += Number(s.amount) || 0;
-      }
-    }
-    return Math.min(remainingAfterAdvance, sum);
-  }, [outstandingBorrows, borrowSelections, remainingAfterAdvance]);
+  const requestedBorrow = outstandingBorrows.reduce((sum, b) => {
+    const s = borrowSelections[b.id];
+    return s?.selected ? sum + (Number(s.amount) || 0) : sum;
+  }, 0);
 
-  // Adjustments total
-  const adjustmentsTotal = useMemo(() => {
-    return openAdjustments.reduce((sum, a) => sum + Number(a.amount || 0), 0);
-  }, [openAdjustments]);
+  const adjustmentsTotal = openAdjustments.reduce((sum, a) => sum + Number(a.amount || 0), 0);
 
-  // Net payable
-  const netPayable = Math.max(0, remainingAfterAdvance - totalBorrowSelected + adjustmentsTotal);
+  // payable = earned - advances - debt in +/- adjustments, then borrow from a positive remainder
+  const fin = calculateCycleFinancials(
+    monthlySalary,
+    cycle.cycleDays,
+    cycleAttendance.deductedDays,
+    advancesThisCycleTotal,
+    debtInTotal,
+    requestedBorrow,
+    adjustmentsTotal
+  );
+  const totalBorrowSelected = fin.borrowRecoveryDeducted;
+  const netPayable = fin.netPayable;
 
-  // Form inputs
+  // Inline adjustment (kept inside the payout window)
+  const [adjAmount, setAdjAmount] = useState(0);
+  const [adjReason, setAdjReason] = useState('');
+  const addAdjustment = () => {
+    if (!adjAmount) { toast.error('Enter an amount (use a minus sign for a deduction).'); return; }
+    if (!adjReason.trim()) { toast.error('Enter a reason.'); return; }
+    onAddAdjustment(adjAmount, adjReason.trim());
+    setAdjAmount(0);
+    setAdjReason('');
+  };
+
   const [paidOn, setPaidOn] = useState<string>(() => toLocalDateString(new Date()));
   const [paymentRef, setPaymentRef] = useState<string>('Cash');
   const [note, setNote] = useState<string>('');
@@ -1757,63 +1260,70 @@ const CyclePayoutModal = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // PRD Section 5: Unmarked days warning & confirmation
     if (cycleAttendance.notMarkedDays > 0) {
       const confirmed = window.confirm(
         `There are ${cycleAttendance.notMarkedDays} unmarked days in this cycle. Unmarked days are paid in full. Do you want to proceed?`
       );
       if (!confirmed) return;
     }
+    if (fin.carriedForwardAdvanceOut > 0) {
+      const confirmed = window.confirm(
+        `Payable is ${formatRs(fin.payable)}. ₹0 will be paid and ${formatRs(fin.carriedForwardAdvanceOut)} will be carried as Debt to the next cycle. Continue?`
+      );
+      if (!confirmed) return;
+    }
 
+    // Allocate the (capped) recovery across the selected borrows in order
+    let remainingRecovery = totalBorrowSelected;
     const borrowRecoveries = outstandingBorrows
       .filter(b => borrowSelections[b.id]?.selected && (Number(borrowSelections[b.id]?.amount) || 0) > 0)
-      .map(b => ({
-        borrowId: b.id,
-        amount: Number(borrowSelections[b.id].amount),
-        reason: b.reason
-      }));
-
-    const adjustmentsApplied = openAdjustments.map(a => ({
-      id: a.id,
-      amount: a.amount,
-      reason: a.reason
-    }));
-
-    const deductedDates = cycleAttendance.deductedDates.map(d => ({
-      date: d.date,
-      type: d.type,
-      amount: perDay
-    }));
+      .map(b => {
+        const amount = Math.min(Number(borrowSelections[b.id].amount) || 0, remainingRecovery);
+        remainingRecovery = Math.round((remainingRecovery - amount) * 100) / 100;
+        return { borrowId: b.id, amount, reason: b.reason };
+      })
+      .filter(r => r.amount > 0);
 
     onExecute({
       employeeId: employee.id,
+      cycleIndex: cycle.cycleIndex,
       cycleStart: cycle.startDate,
       cycleEnd: cycle.endDate,
       cycleDays: cycle.cycleDays,
       salaryUsed: monthlySalary,
-      perDay,
+      perDay: fin.perDayAmount,
+      payBasisDays: fin.payBasisDays,
       gross: monthlySalary,
       presentDays: cycleAttendance.presentDays,
       absentDays: cycleAttendance.absentDays,
-      paidLeaveDays: cycleAttendance.paidLeaveDays,
-      unpaidLeaveDays: cycleAttendance.unpaidLeaveDays,
+      halfDays: cycleAttendance.halfDays,
+      paidLeaveDays: 0, // legacy leave is counted as Present / Absent
+      unpaidLeaveDays: 0,
       notMarkedDays: cycleAttendance.notMarkedDays,
-      deductedDates,
-      attendanceDeduction,
-      earnedAmount,
-      advanceDeducted,
-      carriedForwardAdvanceIn,
-      carriedForwardAdvanceOut,
+      deductedDates: cycleAttendance.deductedDates.map(d => ({
+        date: d.date,
+        type: d.type,
+        amount: Math.round(fin.perDayAmount * d.weight * 100) / 100,
+      })),
+      attendanceDeduction: fin.deductionAmount,
+      earnedAmount: fin.earnedAmount,
+      advanceDeducted: fin.advanceDeducted,
+      carriedForwardAdvanceIn: debtInTotal,
+      carriedForwardAdvanceOut: fin.carriedForwardAdvanceOut,
+      debtInLines,
+      payableAmount: fin.payable,
       borrowDeducted: totalBorrowSelected,
       borrowRecoveries,
       adjustmentsTotal,
-      adjustmentsApplied,
+      adjustmentsApplied: openAdjustments.map(a => ({ id: a.id, amount: a.amount, reason: a.reason })),
       netPaid: netPayable,
       paidOn,
       paymentRef,
       note,
     });
   };
+
+  const inputCls = 'px-2 py-1.5 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent';
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in font-sans">
@@ -1822,7 +1332,7 @@ const CyclePayoutModal = ({
           <div>
             <h3 className="font-bold text-base text-foreground">Salary Payout - {employee.name}</h3>
             <p className="text-xs text-muted-foreground">
-              Cycle: {formatDDMMYYYY(cycle.startDate)} to {formatDDMMYYYY(cycle.endDate)} ({cycle.cycleDays} days)
+              Cycle #{cycle.cycleIndex + 1}: {formatDDMMYYYY(cycle.startDate)} to {formatDDMMYYYY(cycle.endDate)} ({cycle.cycleDays} days)
             </p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
@@ -1830,7 +1340,6 @@ const CyclePayoutModal = ({
           </button>
         </div>
 
-        {/* Unmarked Days Warning Banner */}
         {cycleAttendance.notMarkedDays > 0 && (
           <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
             <Clock className="w-4 h-4 shrink-0" />
@@ -1841,15 +1350,14 @@ const CyclePayoutModal = ({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          
-          {/* Earnings & Attendance breakdown */}
+          {/* Earnings & attendance */}
           <div className="p-3 bg-secondary/30 rounded-xl border border-border space-y-2 text-xs">
             <div className="flex justify-between items-center font-bold text-foreground">
               <span>Monthly Salary (Gross):</span>
-              <span>₹{monthlySalary.toLocaleString('en-IN')} (₹{perDay}/day)</span>
+              <span>{formatRs(monthlySalary)} ({formatRs(fin.perDayAmount)}/day, 30-day month)</span>
             </div>
 
-            <div className="grid grid-cols-5 gap-1 text-center py-2 border-y border-border/60">
+            <div className="grid grid-cols-4 gap-1 text-center py-2 border-y border-border/60">
               <div>
                 <p className="text-muted-foreground text-[10px]">Present</p>
                 <p className="font-bold text-emerald-600">{cycleAttendance.presentDays}</p>
@@ -1859,12 +1367,8 @@ const CyclePayoutModal = ({
                 <p className="font-bold text-destructive">{cycleAttendance.absentDays}</p>
               </div>
               <div>
-                <p className="text-muted-foreground text-[10px]">Paid Leave</p>
-                <p className="font-bold text-blue-600">{cycleAttendance.paidLeaveDays}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Unpaid Leave</p>
-                <p className="font-bold text-amber-600">{cycleAttendance.unpaidLeaveDays}</p>
+                <p className="text-muted-foreground text-[10px]">Half Day</p>
+                <p className="font-bold text-amber-600">{cycleAttendance.halfDays}</p>
               </div>
               <div>
                 <p className="text-muted-foreground text-[10px]">Not Marked</p>
@@ -1874,34 +1378,74 @@ const CyclePayoutModal = ({
 
             <div className="flex justify-between text-muted-foreground pt-1">
               <span>Attendance Deduction ({cycleAttendance.deductedDays} days):</span>
-              <span className="font-bold text-destructive">-₹{attendanceDeduction.toLocaleString('en-IN')}</span>
+              <span className="font-bold text-destructive">-{formatRs(fin.deductionAmount)}</span>
             </div>
 
             <div className="flex justify-between font-bold text-foreground pt-1 border-t border-border/60">
               <span>Earned Salary:</span>
-              <span>₹{earnedAmount.toLocaleString('en-IN')}</span>
+              <span>{formatRs(fin.earnedAmount)}</span>
             </div>
           </div>
 
-          {/* Advances to deduct */}
+          {/* Advances & debt brought in */}
           <div className="p-3 bg-secondary/30 rounded-xl border border-border space-y-1 text-xs">
             <div className="flex justify-between items-center">
-              <span className="font-semibold text-foreground">Advances Auto-Deducted:</span>
-              <span className="font-bold text-destructive">-₹{advanceDeducted.toLocaleString('en-IN')}</span>
+              <span className="font-semibold text-foreground">Advances (this cycle):</span>
+              <span className="font-bold text-destructive">-{formatRs(advancesThisCycleTotal)}</span>
             </div>
-            <p className="text-[10px] text-muted-foreground">
-              This cycle: ₹{advancesThisCycleTotal.toLocaleString('en-IN')} &bull; Brought forward: ₹{carriedForwardAdvanceIn.toLocaleString('en-IN')}
-              {carriedForwardAdvanceOut > 0 && ` &bull; Carried forward to next slip: ₹${carriedForwardAdvanceOut.toLocaleString('en-IN')}`}
-            </p>
+            {debtInLines.map(l => (
+              <div key={l.id} className="flex justify-between items-center">
+                <span className="text-foreground">{l.label}:</span>
+                <span className="font-bold text-destructive">-{formatRs(l.amount)}</span>
+              </div>
+            ))}
           </div>
 
-          {/* Borrows to recover (optional selective checkbox) */}
+          {/* Adjustments (+/-), with an inline add form */}
+          <div className="p-3 bg-secondary/30 rounded-xl border border-border space-y-2 text-xs">
+            <div className="flex justify-between items-center font-semibold text-foreground">
+              <span>Adjustments:</span>
+              <span className={adjustmentsTotal >= 0 ? 'text-emerald-600 font-bold' : 'text-destructive font-bold'}>
+                {adjustmentsTotal >= 0 ? '+' : ''}{formatRs(adjustmentsTotal)}
+              </span>
+            </div>
+            {openAdjustments.map(a => (
+              <div key={a.id} className="flex justify-between text-[11px] text-muted-foreground">
+                <span>{a.reason}</span>
+                <span className="font-semibold text-foreground">{a.amount >= 0 ? '+' : ''}{formatRs(a.amount)}</span>
+              </div>
+            ))}
+            <div className="flex items-center gap-2 pt-1">
+              <NumberInput
+                step="any"
+                placeholder="+/- amount"
+                value={adjAmount || ''}
+                onValueChange={setAdjAmount}
+                className={`${inputCls} w-28`}
+              />
+              <input
+                type="text"
+                placeholder="Reason"
+                value={adjReason}
+                onChange={e => setAdjReason(e.target.value)}
+                className={`${inputCls} flex-1`}
+              />
+              <button type="button" onClick={addAdjustment} className="flex items-center gap-1 px-3 py-1.5 bg-secondary hover:bg-secondary/80 border border-border rounded-lg font-semibold text-foreground">
+                <Plus className="w-3.5 h-3.5" /> Add
+              </button>
+            </div>
+          </div>
+
+          {/* Borrows to recover (only from a positive remainder) */}
           {outstandingBorrows.length > 0 && (
             <div className="p-3 bg-secondary/30 rounded-xl border border-border space-y-2 text-xs">
               <div className="flex justify-between items-center">
-                <span className="font-semibold text-foreground">Borrow Recovery (Select to deduct):</span>
-                <span className="font-bold text-destructive">-₹{totalBorrowSelected.toLocaleString('en-IN')}</span>
+                <span className="font-semibold text-foreground">Borrow Recovery (select to deduct):</span>
+                <span className="font-bold text-destructive">-{formatRs(totalBorrowSelected)}</span>
               </div>
+              {requestedBorrow > totalBorrowSelected && (
+                <p className="text-[10px] text-muted-foreground">Recovery is limited to what is left after advances and debt ({formatRs(totalBorrowSelected)}).</p>
+              )}
 
               <div className="space-y-1.5 max-h-36 overflow-y-auto pt-1">
                 {outstandingBorrows.map(b => {
@@ -1924,7 +1468,7 @@ const CyclePayoutModal = ({
                           className="rounded text-primary"
                         />
                         <span>
-                          {formatDDMMYYYY(b.transactionDate || b.date)} &bull; Balance: ₹{bal.toLocaleString('en-IN')}
+                          {formatDDMMYYYY(b.transactionDate || b.date)} &bull; Balance: {formatRs(bal)}
                           {b.reason && <span className="text-muted-foreground ml-1">({b.reason})</span>}
                         </span>
                       </label>
@@ -1938,10 +1482,7 @@ const CyclePayoutModal = ({
                             step="any"
                             value={amt}
                             onValueChange={val => {
-                              setBorrowSelections(prev => ({
-                                ...prev,
-                                [b.id]: { selected: true, amount: val }
-                              }));
+                              setBorrowSelections(prev => ({ ...prev, [b.id]: { selected: true, amount: val } }));
                             }}
                             onBlur={() => {
                               setBorrowSelections(prev => ({
@@ -1960,33 +1501,14 @@ const CyclePayoutModal = ({
             </div>
           )}
 
-          {/* Adjustments */}
-          {openAdjustments.length > 0 && (
-            <div className="p-3 bg-secondary/30 rounded-xl border border-border space-y-1 text-xs">
-              <div className="flex justify-between items-center font-semibold text-foreground">
-                <span>Pending Adjustments Applied:</span>
-                <span className={adjustmentsTotal >= 0 ? 'text-emerald-600 font-bold' : 'text-destructive font-bold'}>
-                  {adjustmentsTotal >= 0 ? `+₹${adjustmentsTotal}` : `-₹${Math.abs(adjustmentsTotal)}`}
-                </span>
-              </div>
-              <div className="space-y-0.5 pt-1 text-[11px] text-muted-foreground">
-                {openAdjustments.map(a => (
-                  <div key={a.id} className="flex justify-between">
-                    <span>{a.reason}</span>
-                    <span className="font-semibold text-foreground">
-                      {a.amount >= 0 ? `+₹${a.amount}` : `-₹${Math.abs(a.amount)}`}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Net Payable Highlight */}
+          {/* Payable */}
           <div className="p-4 bg-primary text-primary-foreground rounded-xl flex items-center justify-between shadow-sm">
             <div>
-              <p className="text-xs uppercase font-bold tracking-wider opacity-80">Net Payable</p>
-              <p className="text-2xl font-black">₹{netPayable.toLocaleString('en-IN')}</p>
+              <p className="text-xs uppercase font-bold tracking-wider opacity-80">Payable</p>
+              <p className={`text-2xl font-black ${fin.payable < 0 ? 'text-red-300' : ''}`}>{formatRs(fin.payable)}</p>
+              {fin.carriedForwardAdvanceOut > 0 && (
+                <p className="text-xs opacity-90 mt-0.5">₹0 paid · {formatRs(fin.carriedForwardAdvanceOut)} carried as Debt to the next cycle</p>
+              )}
             </div>
             <DollarSign className="w-8 h-8 opacity-40" />
           </div>
@@ -2038,7 +1560,7 @@ const CyclePayoutModal = ({
               type="submit"
               className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg text-xs font-semibold shadow-sm transition-colors"
             >
-              Confirm & Pay ₹{netPayable.toLocaleString('en-IN')}
+              Confirm & Pay {formatRs(netPayable)}
             </button>
           </div>
         </form>
@@ -2159,127 +1681,24 @@ const ReversePayoutModal = ({ payment, onClose, onConfirm }: ReversePayoutModalP
 };
 
 // ====================================================================
-// SUB-COMPONENT: RecordAdjustmentModal
-// ====================================================================
-interface RecordAdjustmentModalProps {
-  employee: Employee;
-  cycle: SalaryCycle | null;
-  onClose: () => void;
-  onSave: (amount: number, reason: string) => void;
-}
-
-const RecordAdjustmentModal = ({ employee, cycle, onClose, onSave }: RecordAdjustmentModalProps) => {
-  const [amount, setAmount] = useState<number>(0);
-  const [isCredit, setIsCredit] = useState<boolean>(true); // Credit (+) or Deduction (-)
-  const [reason, setReason] = useState<string>('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!amount || !reason.trim()) return;
-    const finalAmount = isCredit ? Math.abs(amount) : -Math.abs(amount);
-    onSave(finalAmount, reason.trim());
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in font-sans">
-      <div className="bg-card text-card-foreground rounded-xl p-6 shadow-xl max-w-sm w-full border border-border space-y-4">
-        <div className="flex items-center justify-between border-b border-border pb-3">
-          <h3 className="font-bold text-sm text-foreground">Add Adjustment: {employee.name}</h3>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Adjustment Type</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setIsCredit(true)}
-                className={`py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                  isCredit 
-                    ? 'bg-emerald-600 text-white border-emerald-600' 
-                    : 'bg-secondary text-muted-foreground border-border'
-                }`}
-              >
-                + Credit (Add to Pay)
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsCredit(false)}
-                className={`py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                  !isCredit 
-                    ? 'bg-destructive text-white border-destructive' 
-                    : 'bg-secondary text-muted-foreground border-border'
-                }`}
-              >
-                - Deduction (Cut Pay)
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Amount (₹) *</label>
-            <NumberInput
-              min="1"
-              required
-              value={amount || ''}
-              step="any"
-              onValueChange={(v) => setAmount(v)}
-              placeholder="e.g. 500"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Reason (Required) *</label>
-            <input
-              type="text"
-              required
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              placeholder="e.g. Overtime bonus, damage fine, festival gift"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 border border-border hover:bg-secondary text-foreground rounded-lg text-xs font-semibold"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg text-xs font-semibold shadow-sm transition-colors"
-            >
-              Save Adjustment
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// ====================================================================
 // SUB-COMPONENT: FinalSettlementModal (PRD Section 7)
 // ====================================================================
+/** Spreads a capped borrow recovery across borrows in order (never more than each balance). */
+const allocateBorrowRecovery = (borrowsList: BorrowRecord[], total: number) => {
+  let left = Math.round(total * 100) / 100;
+  return borrowsList
+    .map(b => {
+      const amount = Math.min(Math.max(0, b.amount - (b.repaid_amount || 0)), left);
+      left = Math.round((left - amount) * 100) / 100;
+      return { borrowId: b.id, amount, reason: b.reason };
+    })
+    .filter(r => r.amount > 0);
+};
+
 interface FinalSettlementModalProps {
   employee: Employee;
   cycle: SalaryCycle;
-  cycleAttendance: {
-    presentDays: number;
-    absentDays: number;
-    paidLeaveDays: number;
-    unpaidLeaveDays: number;
-    notMarkedDays: number;
-    deductedDays: number;
-    deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave' }>;
-  };
+  cycleAttendance: CycleAttendanceSummary;
   advancesInCycle: SalaryAdvance[];
   priorAdvances: SalaryAdvance[];
   outstandingBorrows: BorrowRecord[];
@@ -2309,33 +1728,39 @@ const FinalSettlementModal = ({
     return Math.max(1, diffDaysInclusive(cycle.startDate, lastWorkingDate));
   }, [cycle.startDate, lastWorkingDate]);
 
-  const cycleDays = cycle.cycleDays || 30;
-  const perDay = cycleDays > 0 ? Math.round((employee.monthlySalary / cycleDays) * 100) / 100 : 0;
+  // 30-day month basis for every cycle
+  const perDay = Math.round((employee.monthlySalary / PAY_BASIS_DAYS) * 100) / 100;
 
-  // PRD Section 7: earned = perDay * (days worked - deducted days)
-  const payableDays = Math.max(0, daysWorked - cycleAttendance.deductedDays);
-  const earnedPaise = Math.round(perDay * 100 * payableDays);
-  const earnedAmount = earnedPaise / 100;
-
-  // Total advances
-  const advancesTotal = advancesInCycle.reduce((s, a) => s + (Number(a.amount) || 0), 0) +
-    priorAdvances.reduce((s, a) => s + Math.max(0, a.amount - (a.deducted_amount || 0)), 0);
-  const advanceDeducted = Math.min(earnedAmount, advancesTotal);
-
-  // Borrows
+  // Advances in the cycle + debt / advances brought forward
+  const debtInLines = priorAdvances
+    .map(a => ({
+      id: a.id,
+      label: a.kind === 'debt' ? (a.reason || 'Debt carried forward') : 'Advance brought forward (' + formatDDMMYYYY(a.transactionDate || a.date) + ')',
+      amount: Math.max(0, a.amount - (a.deducted_amount || 0)),
+    }))
+    .filter(l => l.amount > 0);
+  const debtInTotal = debtInLines.reduce((s, l) => s + l.amount, 0);
+  const advancesTotal = advancesInCycle.reduce((s, a) => s + (Number(a.amount) || 0), 0) + debtInTotal;
   const totalBorrows = outstandingBorrows.reduce((s, b) => s + Math.max(0, b.amount - (b.repaid_amount || 0)), 0);
-  const remaining = earnedAmount - advanceDeducted;
-  const borrowDeducted = Math.min(remaining, totalBorrows);
-
-  // Adjustments
   const adjustmentsTotal = openAdjustments.reduce((s, a) => s + Number(a.amount || 0), 0);
 
-  const netPayable = Math.max(0, remaining - borrowDeducted + adjustmentsTotal);
+  // earned = per-day x (days worked - deducted days); a shortfall is owed, never forgiven
+  const settlement = calculateFinalSettlement(
+    employee.monthlySalary, daysWorked, cycleAttendance.deductedDays, advancesTotal, totalBorrows, adjustmentsTotal
+  );
+  const payableDays = settlement.payableDays;
+  const earnedAmount = settlement.earned;
+  const advanceDeducted = settlement.advanceDeducted;
+  const borrowDeducted = settlement.borrowDeducted;
+  const netPayable = settlement.netPayable;
+  const owedAmount = settlement.owedByEmployee;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const conf = window.confirm(
-      `Final settlement will deactivate ${employee.name} and finalize all payroll records. Proceed?`
+      `Final settlement will deactivate ${employee.name} and finalize all payroll records.` +
+      (owedAmount > 0 ? `\n\n${employee.name} will still owe ${formatRs(owedAmount)}. It is recorded as an open debt on their profile.` : '') +
+      '\n\nProceed?'
     );
     if (!conf) return;
 
@@ -2349,21 +1774,22 @@ const FinalSettlementModal = ({
       gross: earnedAmount,
       presentDays: cycleAttendance.presentDays,
       absentDays: cycleAttendance.absentDays,
-      paidLeaveDays: cycleAttendance.paidLeaveDays,
-      unpaidLeaveDays: cycleAttendance.unpaidLeaveDays,
+      halfDays: cycleAttendance.halfDays,
+      paidLeaveDays: 0, // legacy leave is counted as Present / Absent
+      unpaidLeaveDays: 0,
+      payBasisDays: PAY_BASIS_DAYS,
       notMarkedDays: cycleAttendance.notMarkedDays,
-      deductedDates: cycleAttendance.deductedDates.map(d => ({ date: d.date, type: d.type, amount: perDay })),
+      deductedDates: cycleAttendance.deductedDates.map(d => ({ date: d.date, type: d.type, amount: Math.round(perDay * d.weight * 100) / 100 })),
       attendanceDeduction: Math.round(perDay * 100 * cycleAttendance.deductedDays) / 100,
       earnedAmount,
       advanceDeducted,
-      carriedForwardAdvanceIn: 0,
-      carriedForwardAdvanceOut: Math.max(0, advancesTotal - advanceDeducted),
+      carriedForwardAdvanceIn: debtInTotal,
+      carriedForwardAdvanceOut: owedAmount, // recorded as an open 'Owed by employee' debt
+      debtInLines,
+      payableAmount: settlement.payable,
+      cycleIndex: cycle.cycleIndex,
       borrowDeducted,
-      borrowRecoveries: outstandingBorrows.map(b => ({
-        borrowId: b.id,
-        amount: Math.min(borrowDeducted, Math.max(0, b.amount - (b.repaid_amount || 0))),
-        reason: b.reason
-      })),
+      borrowRecoveries: allocateBorrowRecovery(outstandingBorrows, borrowDeducted),
       adjustmentsTotal,
       adjustmentsApplied: openAdjustments.map(a => ({ id: a.id, amount: a.amount, reason: a.reason })),
       netPaid: netPayable,
@@ -2413,8 +1839,8 @@ const FinalSettlementModal = ({
               <span>₹{earnedAmount.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
-              <span>Advances Deducted:</span>
-              <span>-₹{advanceDeducted.toLocaleString('en-IN')}</span>
+              <span>Advances & Debt Deducted:</span>
+              <span>-{formatRs(advanceDeducted)}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
               <span>Borrows Recovered:</span>
@@ -2428,8 +1854,15 @@ const FinalSettlementModal = ({
 
           <div className="p-3 bg-primary text-primary-foreground rounded-xl flex items-center justify-between">
             <span className="font-bold text-xs uppercase">Net Final Settlement Pay</span>
-            <span className="text-xl font-black">₹{netPayable.toLocaleString('en-IN')}</span>
+            <span className="text-xl font-black">{formatRs(netPayable)}</span>
           </div>
+
+          {owedAmount > 0 && (
+            <div className="p-3 rounded-xl border border-destructive/40 bg-destructive/10 text-xs text-destructive space-y-1">
+              <p className="font-bold text-sm">Owed by employee: {formatRs(owedAmount)}</p>
+              <p>Advances and debt exceed what was earned. Nothing is paid, and this amount stays open on {employee.name}'s profile until it is recovered or written off.</p>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div>
@@ -2485,6 +1918,7 @@ interface AddEditEmployeeModalProps {
   vaultStatus: { initialized: boolean; unlocked: boolean; lockedUntil?: number };
   decryptedVaultData: { aadhaarNumber?: string; aadhaarImage?: string; photo?: string } | null;
   onOpenVault: () => void;
+  onManageShifts: () => void;
   onClose: () => void;
   onSave: (
     empData: Omit<Employee, 'id' | 'created_at' | 'updated_at'>,
@@ -2500,6 +1934,7 @@ const AddEditEmployeeModal = ({
   vaultStatus,
   decryptedVaultData,
   onOpenVault,
+  onManageShifts,
   onClose,
   onSave
 }: AddEditEmployeeModalProps) => {
@@ -2623,14 +2058,17 @@ const AddEditEmployeeModal = ({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-foreground mb-1">Shift</label>
+              <label className="flex items-center justify-between text-xs font-semibold text-foreground mb-1">
+                <span>Shift</span>
+                <button type="button" onClick={onManageShifts} className="text-[11px] font-semibold text-primary underline hover:no-underline">Manage shifts</button>
+              </label>
               <select
                 value={shiftId}
                 onChange={e => setShiftId(e.target.value)}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
               >
                 {shifts.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.startTime} - {s.endTime})</option>
+                  <option key={s.id} value={s.id}>{formatShiftLabel(s)}</option>
                 ))}
               </select>
             </div>
@@ -2782,199 +2220,6 @@ const AddEditEmployeeModal = ({
               className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg text-xs font-semibold shadow-sm transition-colors"
             >
               Save Staff Record
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// ====================================================================
-// SUB-COMPONENT: RecordAdvanceModal (PRD Section 4: Paid Cycle Warning)
-// ====================================================================
-interface RecordAdvanceModalProps {
-  employee: Employee;
-  defaultDate: string;
-  cycles: SalaryCycle[];
-  onClose: () => void;
-  onSave: (amount: number, date: string, reason?: string) => void;
-}
-
-const RecordAdvanceModal = ({ employee, defaultDate, cycles, onClose, onSave }: RecordAdvanceModalProps) => {
-  const [amount, setAmount] = useState<number>(0);
-  const [date, setDate] = useState<string>(defaultDate);
-  const [reason, setReason] = useState<string>('');
-
-  const fallsInPaidCycle = useMemo(() => {
-    return cycles.some(c => c.status === 'Paid' && date >= c.startDate && date <= c.endDate);
-  }, [cycles, date]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (amount <= 0) return;
-    onSave(amount, date, reason);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in font-sans">
-      <div className="bg-card text-card-foreground rounded-xl p-6 shadow-xl max-w-sm w-full border border-border space-y-4">
-        <div className="flex items-center justify-between border-b border-border pb-3">
-          <h3 className="font-bold text-sm text-foreground">Record Advance: {employee.name}</h3>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {fallsInPaidCycle && (
-          <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-xl text-xs text-amber-700 dark:text-amber-400">
-            <strong>Paid Cycle Notice:</strong> This date falls in an already paid salary cycle. The advance will be recorded and automatically deducted as a late adjustment in the next payout.
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Advance Amount (₹) *</label>
-            <NumberInput
-              min="1"
-              required
-              value={amount || ''}
-              step="any"
-              onValueChange={(v) => setAmount(v)}
-              placeholder="e.g. 1000"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Date *</label>
-            <input
-              type="date"
-              required
-              value={date}
-              onChange={e => setDate(e.target.value)}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-foreground">Reason / Note</label>
-              <span className="text-[10px] text-muted-foreground italic">Prints on salary slip</span>
-            </div>
-            <input
-              type="text"
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              placeholder="e.g. Festival advance, emergency"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 border border-border hover:bg-secondary text-foreground rounded-lg text-xs font-semibold transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg text-xs font-semibold shadow-sm transition-colors"
-            >
-              Save Advance
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// ====================================================================
-// SUB-COMPONENT: RecordBorrowModal
-// ====================================================================
-interface RecordBorrowModalProps {
-  employee: Employee;
-  defaultDate: string;
-  onClose: () => void;
-  onSave: (amount: number, date: string, reason?: string) => void;
-}
-
-const RecordBorrowModal = ({ employee, defaultDate, onClose, onSave }: RecordBorrowModalProps) => {
-  const [amount, setAmount] = useState<number>(0);
-  const [date, setDate] = useState<string>(defaultDate);
-  const [reason, setReason] = useState<string>('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (amount <= 0) return;
-    onSave(amount, date, reason);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in font-sans">
-      <div className="bg-card text-card-foreground rounded-xl p-6 shadow-xl max-w-sm w-full border border-border space-y-4">
-        <div className="flex items-center justify-between border-b border-border pb-3">
-          <h3 className="font-bold text-sm text-foreground">Record Borrow: {employee.name}</h3>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Borrow Amount (₹) *</label>
-            <NumberInput
-              min="1"
-              required
-              value={amount || ''}
-              step="any"
-              onValueChange={(v) => setAmount(v)}
-              placeholder="e.g. 500"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-foreground mb-1">Date *</label>
-            <input
-              type="date"
-              required
-              value={date}
-              onChange={e => setDate(e.target.value)}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-foreground">Reason / Note</label>
-              <span className="text-[10px] text-muted-foreground italic">Prints on salary slip</span>
-            </div>
-            <input
-              type="text"
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-              placeholder="e.g. Medical loan, personal advance"
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 border border-border hover:bg-secondary text-foreground rounded-lg text-xs font-semibold transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg text-xs font-semibold shadow-sm transition-colors"
-            >
-              Save Borrow
             </button>
           </div>
         </form>

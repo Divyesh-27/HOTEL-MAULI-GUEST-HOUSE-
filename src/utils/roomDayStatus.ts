@@ -131,6 +131,11 @@ export function roomStatusForDay(
  * already reserved or occupied by an active booking, or null if none.
  * Uses the same rule as everything else, night by night.
  */
+/** Message shown wherever a stay is refused for overlapping another booking. */
+export function stayOverlapMessage(roomNo: string, conflictDay: string): string {
+  return `Room ${roomNo} is already booked on ${formatDayLabel(conflictDay)}. This stay overlaps another booking — change the dates or choose another room.`;
+}
+
 export function findFirstConflictDate(
   roomNo: string,
   checkIn: string | Date,

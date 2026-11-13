@@ -16,6 +16,7 @@ interface GuestDetailsModalProps {
 
 import { toLocalDateTimeString } from '@/utils/dateUtils';
 import { NumberInput } from '@/components/ui/number-input';
+import { findFirstConflictDate, stayOverlapMessage } from '@/utils/roomDayStatus';
 export { toLocalDateTimeString };
 
 const getNormalizedFormData = (data: Booking | HistoryRecord) => {
@@ -80,6 +81,7 @@ const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false, f
   };
 
   const setSection = useStore(state => state.setSection);
+  const bookings = useStore(state => state.bookings);
   const setPrefilledRegistration = useStore(state => state.setPrefilledRegistration);
 
   const handleNewBookingForGuest = () => {
@@ -148,6 +150,19 @@ const GuestDetailsModal = ({ data, onClose, onUpdate, initialEditMode = false, f
     if (originalMobile && !newMobile) {
       setValidationError('Mobile number cannot be blank when previously recorded.');
       return;
+    }
+
+    // Safety Net 3: an active booking or reservation must not be changed to overlap
+    // another booking of the same room. Checked-out history records are not checked.
+    if (bookings.some(b => b.id === data.id)) {
+      const otherBookings = bookings.filter(b => b.id !== data.id);
+      for (const roomNo of formData.roomNos || []) {
+        const conflictDay = findFirstConflictDate(roomNo, formData.checkIn, Number(formData.days) || 1, otherBookings);
+        if (conflictDay) {
+          setValidationError(stayOverlapMessage(roomNo, conflictDay));
+          return;
+        }
+      }
     }
 
     if (onUpdate) {
