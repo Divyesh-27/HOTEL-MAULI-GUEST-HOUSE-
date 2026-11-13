@@ -22,7 +22,8 @@ import {
   projectDuePayouts, calculateFinalSettlement, cycleGrossSalary, findRecordBeforeDate, describeJoiningDateChange
 } from '@/utils/salaryCycleUtils';
 import {
-  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard
+  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard,
+  SalaryAuditLogSection
 } from './StaffPanels';
 
 const Staff = () => {
@@ -755,7 +756,7 @@ const Staff = () => {
               </div>
 
               {selectedOwedDebts.length > 0 && (
-                <OwedByEmployeeCard debts={selectedOwedDebts} auditLog={selectedAuditLog} onResolve={resolveOwedDebt} />
+                <OwedByEmployeeCard debts={selectedOwedDebts} onResolve={resolveOwedDebt} />
               )}
 
               {/* Attendance for the selected salary cycle */}
@@ -897,6 +898,9 @@ const Staff = () => {
                   deleteBorrow={deleteBorrow}
                 />
               )}
+
+              {/* Salary audit log: every employee */}
+              <SalaryAuditLogSection entries={selectedAuditLog} />
             </>
           ) : (
             <div className="bg-card text-card-foreground rounded-xl p-12 shadow-sm border border-border text-center space-y-3">

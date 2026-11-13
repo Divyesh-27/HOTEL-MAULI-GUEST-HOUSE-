@@ -642,10 +642,9 @@ const OwedDebtRow = ({
 };
 
 export const OwedByEmployeeCard = ({
-  debts, auditLog, onResolve,
+  debts, onResolve,
 }: {
   debts: SalaryAdvance[];
-  auditLog: SalaryAuditEntry[];
   onResolve: (id: string, action: 'Recovered' | 'Written off', amount: number, reason: string) => { success: boolean; error?: string };
 }) => {
   const openTotal = debts
@@ -667,25 +666,49 @@ export const OwedByEmployeeCard = ({
       </p>
       {debts.map(d => <OwedDebtRow key={d.id} debt={d} onResolve={onResolve} />)}
 
-      {auditLog.length > 0 && (
-        <details className="text-xs">
-          <summary className="cursor-pointer font-semibold text-muted-foreground hover:text-foreground">Audit log ({auditLog.length})</summary>
-          <table className="w-full mt-2">
-            <tbody>
-              {[...auditLog].sort((a, b) => b.at.localeCompare(a.at)).map(e => (
-                <tr key={e.id} className="border-t border-border">
-                  <td className="py-1 pr-2 whitespace-nowrap font-mono">{formatStamp(e.at)}</td>
-                  <td className="py-1 pr-2 font-semibold text-foreground">{AUDIT_LABEL[e.action]}</td>
-                  <td className="py-1 pr-2 text-right">{formatRs(e.amount)}</td>
-                  <td className="py-1 pr-2 text-right text-muted-foreground">bal. {formatRs(e.balanceAfter)}</td>
-                  <td className="py-1 pr-2 text-muted-foreground">{e.reason || '-'}</td>
-                  <td className="py-1 text-muted-foreground">{e.by}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
-      )}
     </div>
+  );
+};
+
+// ====================================================================
+// Salary audit log (every employee): owed debts, joining-date changes
+// ====================================================================
+export const SalaryAuditLogSection = ({ entries }: { entries: SalaryAuditEntry[] }) => {
+  const sorted = [...entries].sort((a, b) => b.at.localeCompare(a.at));
+  return (
+    <details className="bg-card border border-border rounded-xl p-5 text-sm">
+      <summary className="cursor-pointer font-bold text-foreground">Salary audit log ({entries.length})</summary>
+      {sorted.length === 0 ? (
+        <p className="text-xs text-muted-foreground mt-3">Nothing recorded yet. Owed amounts, recoveries, write-offs and joining-date changes appear here.</p>
+      ) : (
+        <table className="w-full mt-3 text-xs">
+          <thead>
+            <tr className="text-left text-muted-foreground uppercase">
+              <th className="py-1 pr-2 font-semibold">When</th>
+              <th className="py-1 pr-2 font-semibold">Action</th>
+              <th className="py-1 pr-2 font-semibold text-right">Amount</th>
+              <th className="py-1 pr-2 font-semibold text-right">Balance</th>
+              <th className="py-1 pr-2 font-semibold">Reason</th>
+              <th className="py-1 font-semibold">By</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(e => {
+              const money = e.action !== 'joining_date_changed';
+              return (
+                <tr key={e.id} className="border-t border-border align-top">
+                  <td className="py-1.5 pr-2 whitespace-nowrap font-mono">{formatStamp(e.at)}</td>
+                  <td className="py-1.5 pr-2 font-semibold text-foreground whitespace-nowrap">{AUDIT_LABEL[e.action]}</td>
+                  <td className="py-1.5 pr-2 text-right">{money ? formatRs(e.amount) : '-'}</td>
+                  <td className="py-1.5 pr-2 text-right text-muted-foreground">{money ? formatRs(e.balanceAfter) : '-'}</td>
+                  <td className="py-1.5 pr-2 text-muted-foreground">{e.reason || '-'}</td>
+                  <td className="py-1.5 text-muted-foreground">{e.by}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </details>
   );
 };
