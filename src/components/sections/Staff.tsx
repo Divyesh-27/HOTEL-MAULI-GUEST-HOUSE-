@@ -43,7 +43,6 @@ const Staff = () => {
     updateEmployee,
     softDeleteEmployee,
     markAttendance,
-    markAllPresent,
     addShift,
     updateShift,
     deleteShift,
@@ -77,7 +76,6 @@ const Staff = () => {
     updateEmployee: state.updateEmployee,
     softDeleteEmployee: state.softDeleteEmployee,
     markAttendance: state.markAttendance,
-    markAllPresent: state.markAllPresent,
     addShift: state.addShift,
     updateShift: state.updateShift,
     deleteShift: state.deleteShift,
@@ -280,15 +278,16 @@ const Staff = () => {
     for (const a of attendance) {
       if (a.date === todayStr && !a.deleted_at) byEmp.set(a.employeeId, a.status);
     }
-    let present = 0, halfDay = 0, absent = 0, notMarked = 0;
+    // No mark today = Present by default (only Absent / Half Day are marked explicitly)
+    let present = 0, halfDay = 0, absent = 0;
     for (const emp of activeEmployees) {
+      if (todayStr < emp.joiningDate) continue;
       const st = normalizeAttendanceStatus(byEmp.get(emp.id));
-      if (st === 'Present') present++;
-      else if (st === 'Half Day') halfDay++;
+      if (st === 'Half Day') halfDay++;
       else if (st === 'Absent') absent++;
-      else if (todayStr >= emp.joiningDate) notMarked++;
+      else present++;
     }
-    return { present, halfDay, absent, notMarked };
+    return { present, halfDay, absent };
   }, [activeEmployees, attendance, todayStr]);
 
   // "Payable now" and which employees have a Due cycle (one cycle pass per employee)
@@ -437,20 +436,6 @@ const Staff = () => {
     }
   };
 
-  // All Present: only employees still unmarked today, after confirming the count
-  const handleAllPresent = () => {
-    const count = activeEmployees.filter(e =>
-      todayStr >= e.joiningDate && !attendance.some(a => a.employeeId === e.id && a.date === todayStr && !a.deleted_at)
-    ).length;
-    if (count === 0) {
-      toast.info(`Everyone is already marked for ${formatDDMMYYYY(todayStr)}.`);
-      return;
-    }
-    if (!window.confirm(`Mark ${count} unmarked staff member${count === 1 ? '' : 's'} as Present for ${formatDDMMYYYY(todayStr)}?`)) return;
-    const marked = markAllPresent(todayStr);
-    toast.success(`Marked ${marked} as Present for ${formatDDMMYYYY(todayStr)}`);
-  };
-
   // Role & Shift display helpers
   const getRoleName = (roleId: string) => {
     return staffRoles.find(r => r.id === roleId)?.name || 'Staff';
@@ -475,10 +460,10 @@ const Staff = () => {
     <div className="animate-fade-in space-y-6">
       
       {/* ============================================================== */}
-      {/* 1. TODAY'S STATS + ALL PRESENT                                 */}
+      {/* 1. TODAY'S STATS                                               */}
       {/* ============================================================== */}
-      <div className="flex flex-col lg:flex-row gap-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 flex-1">
+      <div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="stat-card">
             <div className="flex justify-between items-center">
               <div>
@@ -493,10 +478,7 @@ const Staff = () => {
             <div className="flex justify-between items-center">
               <div>
                 <p className="text-xs text-muted-foreground uppercase font-bold">Present Today</p>
-                <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-                  {todayCounts.present}
-                  {todayCounts.halfDay > 0 && <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 ml-2">+{todayCounts.halfDay} half</span>}
-                </p>
+                <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">{todayCounts.present}</p>
               </div>
               <Check className="w-8 h-8 opacity-30 text-emerald-600 dark:text-emerald-400" />
             </div>
@@ -515,8 +497,8 @@ const Staff = () => {
           <div className="stat-card hover:border-amber-500/50">
             <div className="flex justify-between items-center">
               <div>
-                <p className="text-xs text-muted-foreground uppercase font-bold">Not Marked</p>
-                <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">{todayCounts.notMarked}</p>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Half Day Today</p>
+                <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">{todayCounts.halfDay}</p>
               </div>
               <Clock className="w-8 h-8 opacity-30 text-amber-600 dark:text-amber-400" />
             </div>
@@ -532,15 +514,6 @@ const Staff = () => {
             </div>
           </div>
         </div>
-
-        <button
-          onClick={handleAllPresent}
-          className="flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95"
-          title="Mark every staff member still unmarked today as Present"
-        >
-          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-          <span>All Present</span>
-        </button>
       </div>
 
       {/* ============================================================== */}
@@ -882,7 +855,6 @@ const Staff = () => {
                       present={cycleAttendance.presentDays}
                       halfDays={cycleAttendance.halfDays}
                       absent={cycleAttendance.absentDays}
-                      notMarked={cycleAttendance.notMarkedDays}
                     />
                   </div>
                   <div className="xl:col-span-2">
@@ -1260,12 +1232,6 @@ const CyclePayoutModal = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (cycleAttendance.notMarkedDays > 0) {
-      const confirmed = window.confirm(
-        `There are ${cycleAttendance.notMarkedDays} unmarked days in this cycle. Unmarked days are paid in full. Do you want to proceed?`
-      );
-      if (!confirmed) return;
-    }
     if (fin.carriedForwardAdvanceOut > 0) {
       const confirmed = window.confirm(
         `Payable is ${formatRs(fin.payable)}. ₹0 will be paid and ${formatRs(fin.carriedForwardAdvanceOut)} will be carried as Debt to the next cycle. Continue?`
@@ -1299,7 +1265,7 @@ const CyclePayoutModal = ({
       halfDays: cycleAttendance.halfDays,
       paidLeaveDays: 0, // legacy leave is counted as Present / Absent
       unpaidLeaveDays: 0,
-      notMarkedDays: cycleAttendance.notMarkedDays,
+      notMarkedDays: 0, // unmarked days count as Present
       deductedDates: cycleAttendance.deductedDates.map(d => ({
         date: d.date,
         type: d.type,
@@ -1340,14 +1306,6 @@ const CyclePayoutModal = ({
           </button>
         </div>
 
-        {cycleAttendance.notMarkedDays > 0 && (
-          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
-            <Clock className="w-4 h-4 shrink-0" />
-            <span>
-              <strong>{cycleAttendance.notMarkedDays} days</strong> are not marked in this cycle. Unmarked days are paid in full.
-            </span>
-          </div>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Earnings & attendance */}
@@ -1357,7 +1315,7 @@ const CyclePayoutModal = ({
               <span>{formatRs(monthlySalary)} ({formatRs(fin.perDayAmount)}/day, 30-day month)</span>
             </div>
 
-            <div className="grid grid-cols-4 gap-1 text-center py-2 border-y border-border/60">
+            <div className="grid grid-cols-3 gap-1 text-center py-2 border-y border-border/60">
               <div>
                 <p className="text-muted-foreground text-[10px]">Present</p>
                 <p className="font-bold text-emerald-600">{cycleAttendance.presentDays}</p>
@@ -1369,10 +1327,6 @@ const CyclePayoutModal = ({
               <div>
                 <p className="text-muted-foreground text-[10px]">Half Day</p>
                 <p className="font-bold text-amber-600">{cycleAttendance.halfDays}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Not Marked</p>
-                <p className="font-bold text-foreground">{cycleAttendance.notMarkedDays}</p>
               </div>
             </div>
 
@@ -1778,7 +1732,7 @@ const FinalSettlementModal = ({
       paidLeaveDays: 0, // legacy leave is counted as Present / Absent
       unpaidLeaveDays: 0,
       payBasisDays: PAY_BASIS_DAYS,
-      notMarkedDays: cycleAttendance.notMarkedDays,
+      notMarkedDays: 0, // unmarked days count as Present
       deductedDates: cycleAttendance.deductedDates.map(d => ({ date: d.date, type: d.type, amount: Math.round(perDay * d.weight * 100) / 100 })),
       attendanceDeduction: Math.round(perDay * 100 * cycleAttendance.deductedDays) / 100,
       earnedAmount,

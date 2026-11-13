@@ -269,7 +269,7 @@ export function calculateSalarySlipData(params: {
     presentDays = attSummary.presentDays;
     absentDays = attSummary.absentDays;
     halfDays = attSummary.halfDays;
-    notMarkedDays = attSummary.notMarkedDays;
+    notMarkedDays = 0; // unmarked past days count as Present
     draftDeductedDays = attSummary.deductedDays;
     deductedDates = attSummary.deductedDates.map(d => ({
       date: d.date,
@@ -865,12 +865,12 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
       <div class="attendance-strip">
         <div>
           <strong>Attendance (${data.cycleDays} Days in Cycle):</strong> 
-          Present: <strong>${data.presentDays}</strong> &nbsp;|&nbsp; 
-          Absent: <strong>${data.absentDays}</strong> &nbsp;|&nbsp;
+          Present${data.payBasisDays === 30 ? ' (incl. unmarked days)' : ''}: <strong>${data.presentDays}</strong> &nbsp;|&nbsp;
           Half Day: <strong>${data.halfDays}</strong> &nbsp;|&nbsp;
-          ${data.paidLeaveDays > 0 ? `Paid Leave: <strong>${data.paidLeaveDays}</strong> &nbsp;|&nbsp; ` : ''}
-          ${data.unpaidLeaveDays > 0 ? `Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong> &nbsp;|&nbsp; ` : ''}
-          Not Marked: <strong>${data.notMarkedDays}</strong> (paid in full)
+          Absent: <strong>${data.absentDays}</strong>
+          ${data.paidLeaveDays > 0 ? ` &nbsp;|&nbsp; Paid Leave: <strong>${data.paidLeaveDays}</strong>` : ''}
+          ${data.unpaidLeaveDays > 0 ? ` &nbsp;|&nbsp; Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong>` : ''}
+          ${data.notMarkedDays > 0 ? ` &nbsp;|&nbsp; Not Marked: <strong>${data.notMarkedDays}</strong> (paid in full)` : ''}
         </div>
         ${data.deductedDates && data.deductedDates.length > 0 ? `
           <div class="deductions-list">

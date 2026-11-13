@@ -84,7 +84,7 @@ const DayMarkPopup = ({
             disabled={!current}
             className="text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-40 disabled:no-underline"
           >
-            Unmark
+            Unmark (back to default Present)
           </button>
         </div>
       </div>
@@ -136,16 +136,17 @@ export const CycleAttendanceGrid = ({
         {days.map((dateStr, i) => {
           const raw = marks.get(dateStr);
           const status = normalizeAttendanceStatus(raw);
-          const isSunday = dayOfWeek(dateStr) === 0;
           const disabled = dateStr < employee.joiningDate || dateStr > todayStr;
+          // Every day is a working day; an unmarked past/current day is Present by default.
+          const isDefaultPresent = !status && !disabled;
           const [, m, d] = dateStr.split('-').map(Number);
           const showMonth = i === 0 || d === 1;
           const legacy = raw === 'Paid Leave' || raw === 'Unpaid Leave' ? raw : null;
 
           const style = status
             ? MARK_STYLE[status]
-            : isSunday
-              ? 'bg-muted/60 border-border text-muted-foreground'
+            : isDefaultPresent
+              ? 'bg-emerald-500/5 border-dashed border-emerald-500/30 text-emerald-700/80 dark:text-emerald-400/80'
               : 'bg-card border-border text-foreground';
 
           return (
@@ -154,7 +155,9 @@ export const CycleAttendanceGrid = ({
               type="button"
               disabled={disabled}
               onClick={() => setOpenDay(dateStr)}
-              title={disabled ? (dateStr > todayStr ? 'Future day' : 'Before joining') : `Mark ${formatDDMMYYYY(dateStr)}`}
+              title={disabled
+                ? (dateStr > todayStr ? 'Future day' : 'Before joining')
+                : `${formatDDMMYYYY(dateStr)}: ${status ? status : 'Present (default, not marked)'}`}
               className={`h-20 rounded-xl border-2 flex flex-col items-center justify-center transition-all ${style} ${
                 disabled ? 'opacity-35 cursor-not-allowed' : 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer'
               } ${dateStr === todayStr ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}`}
@@ -164,7 +167,7 @@ export const CycleAttendanceGrid = ({
                 {showMonth && <span className="text-[10px] font-semibold ml-1 align-top opacity-70">{MONTHS[m - 1]}</span>}
               </span>
               <span className="text-[11px] font-semibold mt-1">
-                {status || (isSunday ? 'Off' : '')}
+                {status || (isDefaultPresent ? 'Present' : '')}
                 {legacy && <span className="opacity-70"> ({legacy})</span>}
               </span>
             </button>
@@ -188,8 +191,8 @@ export const CycleAttendanceGrid = ({
 // Big summary tiles + salary card
 // ====================================================================
 export const AttendanceSummaryTiles = ({
-  present, halfDays, absent, notMarked,
-}: { present: number; halfDays: number; absent: number; notMarked: number }) => {
+  present, halfDays, absent,
+}: { present: number; halfDays: number; absent: number }) => {
   const tile = (label: string, value: number, cls: string) => (
     <div className="bg-card border border-border rounded-xl p-4 text-center">
       <p className="text-xs uppercase font-bold text-muted-foreground">{label}</p>
@@ -197,11 +200,10 @@ export const AttendanceSummaryTiles = ({
     </div>
   );
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+    <div className="grid grid-cols-3 gap-3">
       {tile('Present', present, 'text-emerald-600 dark:text-emerald-400')}
       {tile('Half Day', halfDays, 'text-amber-600 dark:text-amber-400')}
       {tile('Absent', absent, 'text-destructive')}
-      {tile('Not marked', notMarked, 'text-foreground')}
     </div>
   );
 };

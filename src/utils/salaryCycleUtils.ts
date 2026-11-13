@@ -26,16 +26,17 @@ export interface SalaryCycle {
 }
 
 export interface CycleAttendanceSummary {
-  presentDays: number;     // Present (+ legacy Paid Leave)
+  /** Marked Present + legacy Paid Leave + unmarked past/current days (present by default). */
+  presentDays: number;
+  /** Unmarked past/current days counted as Present (derived, never stored). */
+  defaultPresentDays: number;
   absentDays: number;      // Absent (+ legacy Unpaid Leave)
   halfDays: number;
-  notMarkedDays: number;   // never an absence
   /** absent + 0.5 x half days: the days the salary is reduced by */
   deductedDays: number;
   /** Legacy records in this cycle, already counted in present/absent above. */
   legacyPaidLeaveDays: number;
   legacyUnpaidLeaveDays: number;
-  unmarkedDates: string[];
   deductedDates: Array<{ date: string; type: 'Absent' | 'Half Day' | 'Unpaid Leave'; weight: number }>;
 }
 
@@ -332,8 +333,9 @@ export function generateEmployeeCycles(
 
 /**
  * Calculates attendance counts for an employee within a cycle.
- * Unmarked is NEVER an absence.
- * "Not marked" counts only days from max(cycle start, joining date) to min(cycle end, today).
+ * Every day is a working day (no weekly offs). Unmarked days from max(cycle
+ * start, joining date) to min(cycle end, today) count as Present by default;
+ * only explicitly marked Absent / Half Day reduce pay.
  */
 export function calculateCycleAttendance(
   employee: Employee,
@@ -361,8 +363,8 @@ export function calculateCycleAttendance(
   let halfDays = 0;
   let legacyPaidLeaveDays = 0;
   let legacyUnpaidLeaveDays = 0;
+  let defaultPresentDays = 0;
   const deductedDates: CycleAttendanceSummary['deductedDates'] = [];
-  const unmarkedDates: string[] = [];
 
   // Traverse all days in cycle
   let cur = cycle.startDate;
@@ -381,8 +383,9 @@ export function calculateCycleAttendance(
       halfDays++;
       deductedDates.push({ date: cur, type: 'Half Day', weight: 0.5 });
     } else if (cur >= effectiveStart && cur <= effectiveEnd) {
-      // Unmarked: only counted as "not marked" between joining/start and today
-      unmarkedDates.push(cur);
+      // Every day is a working day; an unmarked past/current day is Present by default.
+      presentDays++;
+      defaultPresentDays++;
     }
 
     cur = addDays(cur, 1);
@@ -392,11 +395,10 @@ export function calculateCycleAttendance(
     presentDays,
     absentDays,
     halfDays,
-    notMarkedDays: unmarkedDates.length,
+    defaultPresentDays,
     deductedDays: absentDays + 0.5 * halfDays,
     legacyPaidLeaveDays,
     legacyUnpaidLeaveDays,
-    unmarkedDates,
     deductedDates,
   };
 }
