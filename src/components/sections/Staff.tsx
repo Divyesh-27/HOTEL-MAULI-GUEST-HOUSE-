@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, ChangeEvent } from 'react';
 import { 
   Users, Check, X, Calendar as CalendarIcon, ChevronLeft, ChevronRight, 
-  Lock, Unlock, DollarSign, Plus, Trash2, Edit2, 
+  Lock, Unlock, IndianRupee, Plus, Trash2, Edit2, 
   CheckCircle2, Clock, Search, ArrowRight, Printer, Download,
   AlertTriangle, RotateCcw, AlertCircle, FileText, Ban, UserCheck
 } from 'lucide-react';
@@ -528,7 +528,7 @@ const Staff = () => {
                 <p className="text-xs text-muted-foreground uppercase font-bold">Payable Now</p>
                 <p className="text-3xl font-bold text-foreground">₹{totalPayableNow.toLocaleString('en-IN')}</p>
               </div>
-              <DollarSign className="w-8 h-8 opacity-30 text-foreground" />
+              <IndianRupee className="w-8 h-8 opacity-30 text-foreground" />
             </div>
           </div>
         </div>
@@ -759,7 +759,7 @@ const Staff = () => {
                         className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-sm"
                         title="Execute salary payout for this cycle"
                       >
-                        <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                        <IndianRupee className="w-3.5 h-3.5 text-emerald-400" />
                         <span>Payout Salary</span>
                       </button>
                     )}
@@ -1510,7 +1510,7 @@ const CyclePayoutModal = ({
                 <p className="text-xs opacity-90 mt-0.5">₹0 paid · {formatRs(fin.carriedForwardAdvanceOut)} carried as Debt to the next cycle</p>
               )}
             </div>
-            <DollarSign className="w-8 h-8 opacity-40" />
+            <IndianRupee className="w-8 h-8 opacity-40" />
           </div>
 
           {/* Payment metadata */}
