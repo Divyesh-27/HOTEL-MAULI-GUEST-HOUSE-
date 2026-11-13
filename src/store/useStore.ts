@@ -245,6 +245,7 @@ interface StoreState {
     debtInLines?: Array<{ id: string; label: string; amount: number }>;
     payableAmount?: number;
     cycleIndex?: number;
+    isTransitionCycle?: boolean;
     attendanceDeduction: number;
     earnedAmount: number;
     advanceDeducted: number;
@@ -281,6 +282,7 @@ interface StoreState {
     debtInLines?: Array<{ id: string; label: string; amount: number }>;
     payableAmount?: number;
     cycleIndex?: number;
+    isTransitionCycle?: boolean;
     attendanceDeduction: number;
     earnedAmount: number;
     advanceDeducted: number;
@@ -1088,6 +1090,7 @@ export const useStore = create<StoreState>()(
           status: 'Paid',
           isLegacy: false,
           isFinalSettlement: !!payout.isFinalSettlement,
+          isTransitionCycle: !!payout.isTransitionCycle,
           lastWorkingDate: payout.lastWorkingDate,
           created_at: now,
           updated_at: now,

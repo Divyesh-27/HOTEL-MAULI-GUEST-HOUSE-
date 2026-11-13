@@ -552,6 +552,7 @@ const AUDIT_LABEL: Record<SalaryAuditEntry['action'], string> = {
   owed_debt_created: 'Owed amount recorded',
   owed_debt_recovered: 'Recovered',
   owed_debt_written_off: 'Written off',
+  joining_date_changed: 'Joining date changed',
 };
 
 const formatStamp = (iso: string) => {

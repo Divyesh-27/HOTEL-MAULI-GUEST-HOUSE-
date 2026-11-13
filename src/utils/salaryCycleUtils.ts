@@ -23,6 +23,8 @@ export interface SalaryCycle {
   paymentId?: string | null;
   payment?: SalaryPayment | null;
   hasAttendanceChangedAfter?: boolean;
+  /** First cycle after a joining-date change (or cut short by a stored paid cycle): paid by days. */
+  isTransition?: boolean;
 }
 
 export interface CycleAttendanceSummary {
@@ -239,9 +241,62 @@ export function getCycleIndexForDate(joiningDate: string, dateStr: string): numb
   return 0;
 }
 
+/** Next date strictly after `afterDate` that falls on the joining day-of-month (clamped to month length). */
+export function nextJoiningDayAfter(joiningDate: string, afterDate: string): string {
+  const joinDay = parseYYYYMMDD(joiningDate).day;
+  let { year, month } = parseYYYYMMDD(afterDate);
+  for (let i = 0; i < 3; i++) {
+    const candidate = formatYYYYMMDD(year, month, Math.min(joinDay, getDaysInMonth(year, month)));
+    if (candidate > afterDate) return candidate;
+    month++;
+    if (month > 12) { month = 1; year++; }
+  }
+  return addDays(afterDate, 1); // not reachable
+}
+
+/** True if `date` is a cycle boundary for this joining date (the joining date or its day-of-month, clamped). */
+export function isJoiningDayBoundary(joiningDate: string, date: string): boolean {
+  if (date === joiningDate) return true;
+  const joinDay = parseYYYYMMDD(joiningDate).day;
+  const { year, month, day } = parseYYYYMMDD(date);
+  return day === Math.min(joinDay, getDaysInMonth(year, month));
+}
+
+/**
+ * Gross salary for a cycle. A transition cycle (after a joining-date change)
+ * is paid by days: min(monthly, round2(monthly x days / 30)).
+ */
+export function cycleGrossSalary(monthlySalary: number, cycle: Pick<SalaryCycle, 'cycleDays' | 'isTransition'>): number {
+  if (!cycle.isTransition) return monthlySalary;
+  const byDays = Math.round((Math.round(monthlySalary * 100) * cycle.cycleDays) / PAY_BASIS_DAYS) / 100;
+  return Math.min(monthlySalary, byDays);
+}
+
+/** Paid snapshot vs current attendance, by money effect only (default-present days never count). */
+function changedAfterPayout(
+  employee: Employee,
+  cycle: Pick<SalaryCycle, 'startDate' | 'endDate' | 'cycleDays'>,
+  payment: SalaryPayment | null | undefined,
+  attendanceRecords: AttendanceRecord[] | undefined,
+  todayStr: string
+): boolean {
+  if (!payment || payment.status !== 'Paid' || !attendanceRecords || payment.absentDays === undefined) return false;
+  const current = calculateCycleAttendance(employee, cycle, attendanceRecords, todayStr);
+  // Older snapshots counted Unpaid Leave separately and had no half days.
+  return (payment.absentDays + (payment.unpaidLeaveDays || 0)) !== current.absentDays ||
+    (payment.halfDays || 0) !== current.halfDays;
+}
+
 /**
  * Generates all salary cycles for an employee from joiningDate up to today
  * (plus the active running cycle).
+ *
+ * With paid payouts that store their cycle dates, those payouts are fixed:
+ * each paid cycle keeps its stored dates, and later cycles continue from the
+ * day after the last paid cycle, following the (possibly changed) joining day.
+ * A cycle that does not start on a joining-day boundary, or is cut short by a
+ * stored paid cycle, is a transition cycle paid by days.
+ * With no such payouts, cycles are generated exactly as before.
  */
 export function generateEmployeeCycles(
   employee: Employee,
@@ -256,6 +311,14 @@ export function generateEmployeeCycles(
   const activePayments = (payments || []).filter(
     p => p.employeeId === employee.id && !p.deleted_at
   );
+
+  const anchors = activePayments
+    .filter(p => p.status !== 'Reversed' && p.cycleStart && p.cycleEnd)
+    .sort((a, b) => (a.cycleStart as string).localeCompare(b.cycleStart as string));
+
+  if (anchors.length > 0) {
+    return generateAnchoredCycles(employee, todayStr, activePayments, anchors, attendanceRecords);
+  }
 
   const cycles: SalaryCycle[] = [];
   let k = 0;
@@ -328,6 +391,76 @@ export function generateEmployeeCycles(
     if (k > 200) break; // Defensive guard
   }
 
+  return cycles;
+}
+
+/** Cycle generation when paid payouts with stored dates exist (see generateEmployeeCycles). */
+function generateAnchoredCycles(
+  employee: Employee,
+  todayStr: string,
+  activePayments: SalaryPayment[],
+  anchors: SalaryPayment[],
+  attendanceRecords: AttendanceRecord[] | undefined
+): SalaryCycle[] {
+  const joiningDate = employee.joiningDate;
+  const firstStart = anchors[0].cycleStart as string;
+  let cursor = firstStart < joiningDate ? firstStart : joiningDate;
+  // Former staff: nothing after their last working day
+  const stopAfter = employee.status === 'inactive' && employee.lastWorkingDate ? employee.lastWorkingDate : null;
+
+  const cycles: SalaryCycle[] = [];
+  for (let k = 0; k <= 200; k++) {
+    const stored = anchors.find(a => (a.cycleStart as string) <= cursor && cursor <= (a.cycleEnd as string));
+    let startDate: string;
+    let endDate: string;
+    let payment: SalaryPayment | null = null;
+    let isTransition = false;
+
+    if (stored) {
+      // Paid cycle: stored dates and numbers, never recomputed
+      startDate = stored.cycleStart as string;
+      endDate = stored.cycleEnd as string;
+      payment = stored;
+    } else {
+      startDate = cursor;
+      endDate = addDays(nextJoiningDayAfter(joiningDate, cursor), -1);
+      const nextStored = anchors.find(a => (a.cycleStart as string) > cursor);
+      let clipped = false;
+      if (nextStored && endDate >= (nextStored.cycleStart as string)) {
+        endDate = addDays(nextStored.cycleStart as string, -1);
+        clipped = true;
+      }
+      isTransition = clipped || !isJoiningDayBoundary(joiningDate, startDate);
+      // Reversed or legacy (month-only) payments, matched by their stored data
+      payment = activePayments.find(p =>
+        (p.cycleStart && p.cycleEnd) ? (p.cycleStart === startDate && p.cycleEnd === endDate) : p.month === startDate.slice(0, 7)
+      ) || null;
+    }
+
+    const cycleDays = diffDaysInclusive(startDate, endDate);
+    let status: SalaryCycle['status'];
+    if (payment) status = payment.status === 'Reversed' ? 'Reversed' : 'Paid';
+    else status = todayStr > endDate ? 'Due' : 'Running';
+
+    cycles.push({
+      id: `${employee.id}_cycle_${k}`,
+      employeeId: employee.id,
+      cycleIndex: k,
+      startDate,
+      endDate,
+      nextPayoutDate: addDays(endDate, 1),
+      cycleDays,
+      status,
+      paymentId: payment?.id || null,
+      payment,
+      hasAttendanceChangedAfter: changedAfterPayout(employee, { startDate, endDate, cycleDays }, payment, attendanceRecords, todayStr),
+      isTransition: isTransition || !!payment?.isTransitionCycle,
+    });
+
+    if (todayStr <= endDate) break;
+    cursor = addDays(endDate, 1);
+    if (stopAfter && cursor > stopAfter) break;
+  }
   return cycles;
 }
 
@@ -420,16 +553,20 @@ export function calculateCycleFinancials(
   thisCycleAdvances: number,
   debtBroughtIn: number,
   selectedBorrowRecovery: number,
-  adjustmentsAmount: number
+  adjustmentsAmount: number,
+  /** Gross for this cycle if not the monthly salary (transition cycle: paid by days). */
+  cycleGross?: number
 ): CycleFinancialSummary {
   const toPaise = (n: number) => Math.round((Number(n) || 0) * 100);
   const salaryPaise = toPaise(monthlySalary);
+  const grossPaise = cycleGross === undefined ? salaryPaise : toPaise(cycleGross);
 
+  // Per-day and deductions always come from the monthly salary / 30
   const deductionPaise = Math.min(
-    salaryPaise,
+    grossPaise,
     Math.max(0, Math.round((salaryPaise * (Number(deductedDays) || 0)) / PAY_BASIS_DAYS))
   );
-  const earnedPaise = salaryPaise - deductionPaise;
+  const earnedPaise = grossPaise - deductionPaise;
 
   const advPaise = toPaise(thisCycleAdvances);
   const debtInPaise = toPaise(debtBroughtIn);
@@ -441,7 +578,7 @@ export function calculateCycleFinancials(
 
   return {
     monthlySalary,
-    salaryUsed: monthlySalary,
+    salaryUsed: grossPaise / 100,
     cycleDays,
     payBasisDays: PAY_BASIS_DAYS,
     perDayAmount: Math.round(salaryPaise / PAY_BASIS_DAYS) / 100,
@@ -472,7 +609,7 @@ const remainingOf = (a: SalaryAdvance) => Math.max(0, (Number(a.amount) || 0) - 
  */
 export function projectDuePayouts(
   employee: Employee,
-  dueCycles: Array<Pick<SalaryCycle, 'startDate' | 'endDate' | 'cycleDays' | 'cycleIndex'>>,
+  dueCycles: Array<Pick<SalaryCycle, 'startDate' | 'endDate' | 'cycleDays' | 'cycleIndex' | 'isTransition'>>,
   attendance: AttendanceRecord[],
   salaryAdvances: SalaryAdvance[],
   openAdjustmentsTotal: number,
@@ -495,7 +632,8 @@ export function projectDuePayouts(
       .filter(a => a.kind !== 'debt' && a.status !== 'Voided' && dateOf(a) >= c.startDate && dateOf(a) <= c.endDate)
       .reduce((s, a) => s + (Number(a.amount) || 0), 0);
     const fin = calculateCycleFinancials(
-      employee.monthlySalary, c.cycleDays, att.deductedDays, advances, carried, 0, i === 0 ? openAdjustmentsTotal : 0
+      employee.monthlySalary, c.cycleDays, att.deductedDays, advances, carried, 0, i === 0 ? openAdjustmentsTotal : 0,
+      cycleGrossSalary(employee.monthlySalary, c)
     );
     totalPaise += Math.round(fin.netPayable * 100);
     const row = { cycleIndex: c.cycleIndex, debtIn: carried, advances, payable: fin.payable, netPayable: fin.netPayable };

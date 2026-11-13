@@ -19,7 +19,7 @@ import {
   SalaryCycle, generateEmployeeCycles, calculateCycleAttendance, 
   calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive,
   CycleAttendanceSummary, AttendanceMark, PAY_BASIS_DAYS, normalizeAttendanceStatus, formatShiftLabel, formatRs,
-  projectDuePayouts, calculateFinalSettlement
+  projectDuePayouts, calculateFinalSettlement, cycleGrossSalary
 } from '@/utils/salaryCycleUtils';
 import {
   CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard
@@ -408,7 +408,8 @@ const Staff = () => {
       cycleAdvancesTotal,
       priorAdvancesTotal,
       0, // borrow recovery is chosen in the payout window
-      openAdjustmentsTotal
+      openAdjustmentsTotal,
+      cycleGrossSalary(selectedEmployee.monthlySalary, selectedCycle)
     );
     return {
       isPaid: false,
@@ -780,7 +781,7 @@ const Staff = () => {
                       >
                         {employeeCycles.map((c, idx) => (
                           <option key={c.id} value={idx}>
-                            Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status})
+                            Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status}){c.isTransition ? ' · Transition' : ''}
                           </option>
                         ))}
                       </select>
@@ -812,6 +813,11 @@ const Staff = () => {
                         <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           <span>Due for Payout</span>
+                        </span>
+                      )}
+                      {selectedCycle.isTransition && (
+                        <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30" title="First cycle after a joining-date change: paid by days">
+                          Transition cycle (joining date changed)
                         </span>
                       )}
                       {selectedCycle.status === 'Running' && (
@@ -1209,7 +1215,8 @@ const CyclePayoutModal = ({
     advancesThisCycleTotal,
     debtInTotal,
     requestedBorrow,
-    adjustmentsTotal
+    adjustmentsTotal,
+    cycleGrossSalary(monthlySalary, cycle)
   );
   const totalBorrowSelected = fin.borrowRecoveryDeducted;
   const netPayable = fin.netPayable;
@@ -1256,7 +1263,8 @@ const CyclePayoutModal = ({
       cycleStart: cycle.startDate,
       cycleEnd: cycle.endDate,
       cycleDays: cycle.cycleDays,
-      salaryUsed: monthlySalary,
+      salaryUsed: fin.salaryUsed,
+      isTransitionCycle: !!cycle.isTransition,
       perDay: fin.perDayAmount,
       payBasisDays: fin.payBasisDays,
       gross: monthlySalary,
@@ -1300,6 +1308,11 @@ const CyclePayoutModal = ({
             <p className="text-xs text-muted-foreground">
               Cycle #{cycle.cycleIndex + 1}: {formatDDMMYYYY(cycle.startDate)} to {formatDDMMYYYY(cycle.endDate)} ({cycle.cycleDays} days)
             </p>
+            {cycle.isTransition && (
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                Transition cycle (joining date changed): paid for {cycle.cycleDays} days = {formatRs(fin.salaryUsed)}
+              </p>
+            )}
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="w-5 h-5" />
@@ -2310,7 +2323,7 @@ const SalarySlipModal = ({
             >
               {cycles.map((c, idx) => (
                 <option key={c.id} value={c.id}>
-                  Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status})
+                  Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status}){c.isTransition ? ' · Transition' : ''}
                 </option>
               ))}
             </select>
