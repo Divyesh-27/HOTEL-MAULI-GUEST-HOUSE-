@@ -155,7 +155,8 @@ export interface AttendanceRecord {
   id: string; // UUID
   employeeId: string;
   date: string; // YYYY-MM-DD
-  status: 'Present' | 'Absent' | 'Paid Leave' | 'Unpaid Leave';
+  /** Present | Absent | Half Day. Paid/Unpaid Leave are legacy values kept only for old records. */
+  status: 'Present' | 'Absent' | 'Half Day' | 'Paid Leave' | 'Unpaid Leave';
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -169,8 +170,14 @@ export interface SalaryAdvance {
   date: string; // YYYY-MM-DD (legacy / display)
   transactionDate?: string; // YYYY-MM-DD (decides the cycle)
   status?: 'Open' | 'Settled' | 'Voided';
-  payoutId?: string | null;
+  payoutId?: string | null; // payout that settled (used) this record
   reason?: string;
+  /** 'debt' = negative payable carried to the next cycle (shown as "Debt"). */
+  kind?: 'advance' | 'debt';
+  /** Payout that created this debt. Reversing it voids the debt. */
+  sourcePayoutId?: string | null;
+  /** 0-based index of the cycle whose payout created this debt. */
+  debtFromCycleIndex?: number;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -221,7 +228,14 @@ export interface SalaryPayment {
   paidLeaveDays?: number;
   unpaidLeaveDays?: number;
   notMarkedDays?: number;
-  deductedDates?: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+  halfDays?: number;
+  deductedDates?: Array<{ date: string; type: 'Absent' | 'Half Day' | 'Unpaid Leave'; amount: number }>;
+  /** 30 for slips on the 30-day basis; missing on older slips (per-day = salary / cycle days). */
+  payBasisDays?: number;
+  /** Debts deducted on this slip, e.g. "Debt carried forward from cycle #3". */
+  debtInLines?: Array<{ id: string; label: string; amount: number }>;
+  /** Signed payable before paying out (negative = debt carried forward). */
+  payableAmount?: number;
   attendanceDeduction?: number;
   earnedAmount?: number;
   advance_deducted: number;

@@ -15,7 +15,7 @@ import { generateUUID } from '@/lib/uuid';
 import type { RegistrationDraft } from '@/utils/registrationDraft';
 import { getRoomStatusOnDate, normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 import { toLocalDateString } from '@/utils/dateUtils';
-import { generateEmployeeCycles, generateSlipNumber, formatDDMMYYYY } from '@/utils/salaryCycleUtils';
+import { generateEmployeeCycles, generateSlipNumber, formatDDMMYYYY, attendanceWeight, PAY_BASIS_DAYS, AttendanceMark } from '@/utils/salaryCycleUtils';
 import {
   pushInvoiceSettingsToCloud,
   pushRoomToCloud,
@@ -203,11 +203,16 @@ interface StoreState {
   // Actions - Staff & Payroll (Modern)
   addStaffRole: (name: string) => StaffRole;
   addShift: (shift: Omit<Shift, 'id' | 'created_at' | 'updated_at'>) => Shift;
+  updateShift: (id: string, updates: Partial<Pick<Shift, 'name' | 'startTime' | 'endTime'>>) => { success: boolean; error?: string };
+  /** Refused while any employee is assigned to the shift. */
+  deleteShift: (id: string) => { success: boolean; error?: string };
   addEmployee: (employee: Omit<Employee, 'id' | 'created_at' | 'updated_at'>) => Employee;
   updateEmployee: (id: string, updates: Partial<Employee>) => void;
   softDeleteEmployee: (id: string) => void;
-  markAttendance: (employeeId: string, date: string, status: 'Present' | 'Absent' | 'Paid Leave' | 'Unpaid Leave') => void;
-  markAllPresent: (date: string) => void;
+  /** status null = unmark (the day is no longer counted either way). */
+  markAttendance: (employeeId: string, date: string, status: AttendanceMark | null) => void;
+  /** Marks only active employees still unmarked on `date`; returns how many were marked. */
+  markAllPresent: (date: string) => number;
   addSalaryAdvance: (advance: { employeeId: string; amount: number; date: string; reason?: string }) => void;
   updateSalaryAdvance: (id: string, updates: Partial<SalaryAdvance>) => { success: boolean; error?: string };
   deleteSalaryAdvance: (id: string) => { success: boolean; error?: string };
@@ -229,7 +234,12 @@ interface StoreState {
     paidLeaveDays: number;
     unpaidLeaveDays: number;
     notMarkedDays: number;
-    deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+    deductedDates: Array<{ date: string; type: 'Absent' | 'Half Day' | 'Unpaid Leave'; amount: number }>;
+    halfDays?: number;
+    payBasisDays?: number;
+    debtInLines?: Array<{ id: string; label: string; amount: number }>;
+    payableAmount?: number;
+    cycleIndex?: number;
     attendanceDeduction: number;
     earnedAmount: number;
     advanceDeducted: number;
@@ -260,7 +270,12 @@ interface StoreState {
     paidLeaveDays: number;
     unpaidLeaveDays: number;
     notMarkedDays: number;
-    deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+    deductedDates: Array<{ date: string; type: 'Absent' | 'Half Day' | 'Unpaid Leave'; amount: number }>;
+    halfDays?: number;
+    payBasisDays?: number;
+    debtInLines?: Array<{ id: string; label: string; amount: number }>;
+    payableAmount?: number;
+    cycleIndex?: number;
     attendanceDeduction: number;
     earnedAmount: number;
     advanceDeducted: number;
@@ -612,6 +627,30 @@ export const useStore = create<StoreState>()(
         return newShift;
       },
 
+      updateShift: (id, updates) => {
+        const state = get();
+        const shift = state.shifts.find((sh) => sh.id === id && !sh.deleted_at);
+        if (!shift) return { success: false, error: 'Shift not found' };
+        if (updates.name !== undefined && !updates.name.trim()) return { success: false, error: 'Shift name cannot be empty.' };
+        const now = new Date().toISOString();
+        set({ shifts: state.shifts.map((sh) => (sh.id === id ? { ...sh, ...updates, name: (updates.name ?? sh.name).trim(), updated_at: now } : sh)) });
+        return { success: true };
+      },
+
+      deleteShift: (id) => {
+        const state = get();
+        const shift = state.shifts.find((sh) => sh.id === id && !sh.deleted_at);
+        if (!shift) return { success: false, error: 'Shift not found' };
+        const assigned = state.employees.filter((e) => e.shiftId === id && !e.deleted_at);
+        if (assigned.length > 0) {
+          const names = assigned.slice(0, 3).map((e) => e.name).join(', ') + (assigned.length > 3 ? ' and ' + (assigned.length - 3) + ' more' : '');
+          return { success: false, error: '"' + shift.name + '" is assigned to ' + names + '. Move them to another shift first.' };
+        }
+        const now = new Date().toISOString();
+        set({ shifts: state.shifts.map((sh) => (sh.id === id ? { ...sh, deleted_at: now, updated_at: now } : sh)) });
+        return { success: true };
+      },
+
       addEmployee: (employeeData) => {
         const newEmployee: Employee = {
           ...employeeData,
@@ -675,17 +714,16 @@ export const useStore = create<StoreState>()(
 
         if (paidCycle && paidCycle.payment) {
           // PRD Section 6: Post-payout attendance changes auto-generate pending SalaryAdjustment
-          const wasOldDeducted = (oldStatus === 'Absent' || oldStatus === 'Unpaid Leave');
-          const isNewDeducted = (status === 'Absent' || status === 'Unpaid Leave');
+          // Money effect in days lost: Absent 1, Half Day 0.5 (legacy Unpaid Leave 1).
+          const oldWeight = attendanceWeight(oldStatus);
+          const newWeight = attendanceWeight(status);
 
-          if (wasOldDeducted !== isNewDeducted) {
-            const cycleDays = paidCycle.cycleDays || 30;
+          if (oldWeight !== newWeight) {
             const salaryUsed = paidCycle.payment.salaryUsed || emp.monthlySalary;
-            const perDayPaise = Math.round((salaryUsed * 100) / cycleDays);
+            const perDayPaise = Math.round((salaryUsed * 100) / PAY_BASIS_DAYS);
 
-            // If formerly deducted and now present/paid leave -> employee is owed refund (+ amount)
-            // If formerly not deducted and now absent/unpaid leave -> deduction (- amount)
-            const diffPaise = wasOldDeducted && !isNewDeducted ? perDayPaise : -perDayPaise;
+            // Fewer days lost now -> employee is owed money (+); more days lost -> deduction (-)
+            const diffPaise = Math.round(perDayPaise * (oldWeight - newWeight));
             const adjAmount = diffPaise / 100;
 
             const autoAdj: SalaryAdjustment = {
@@ -693,7 +731,7 @@ export const useStore = create<StoreState>()(
               employeeId,
               cycleId: paidCycle.id,
               amount: adjAmount,
-              reason: `Changed after payout: ${formatDDMMYYYY(date)} (${oldStatus || 'Unmarked'} -> ${status})`,
+              reason: `Changed after payout: ${formatDDMMYYYY(date)} (${oldStatus || 'Unmarked'} -> ${status || 'Unmarked'})`,
               type: 'auto_attendance_change',
               status: 'Open',
               created_at: now,
@@ -705,7 +743,12 @@ export const useStore = create<StoreState>()(
         }
 
         let updatedAttendance = [...state.attendance];
-        if (existingIdx >= 0) {
+        if (status === null) {
+          // Unmark: soft-delete the record (unmarked is never an absence)
+          if (existingIdx >= 0) {
+            updatedAttendance[existingIdx] = { ...updatedAttendance[existingIdx], deleted_at: now, updated_at: now };
+          }
+        } else if (existingIdx >= 0) {
           updatedAttendance[existingIdx] = {
             ...updatedAttendance[existingIdx],
             status,
@@ -728,33 +771,30 @@ export const useStore = create<StoreState>()(
         };
       }),
 
-      markAllPresent: (date) => set((state) => {
-        const activeEmployees = state.employees.filter((emp) => emp.status === 'active' && !emp.deleted_at);
+      markAllPresent: (date) => {
+        const state = get();
         const now = new Date().toISOString();
-        const updatedAttendance = [...state.attendance];
-
-        for (const emp of activeEmployees) {
-          if (date < emp.joiningDate) continue;
-          const idx = updatedAttendance.findIndex((a) => a.employeeId === emp.id && a.date === date && !a.deleted_at);
-          if (idx >= 0) {
-            updatedAttendance[idx] = {
-              ...updatedAttendance[idx],
-              status: 'Present',
-              updated_at: now,
-            };
-          } else {
-            updatedAttendance.push({
+        // Only employees with no mark yet on this date; existing marks are never overwritten.
+        const toMark = state.employees.filter((emp) =>
+          emp.status === 'active' && !emp.deleted_at && date >= emp.joiningDate &&
+          !state.attendance.some((a) => a.employeeId === emp.id && a.date === date && !a.deleted_at)
+        );
+        if (toMark.length === 0) return 0;
+        set({
+          attendance: [
+            ...state.attendance,
+            ...toMark.map((emp) => ({
               id: generateUUID(),
               employeeId: emp.id,
               date,
-              status: 'Present',
+              status: 'Present' as const,
               created_at: now,
               updated_at: now,
-            });
-          }
-        }
-        return { attendance: updatedAttendance };
-      }),
+            })),
+          ],
+        });
+        return toMark.length;
+      },
 
       addSalaryAdvance: (advance) => set((state) => {
         const emp = state.employees.find((e) => e.id === advance.employeeId);
@@ -1014,6 +1054,10 @@ export const useStore = create<StoreState>()(
           unpaidLeaveDays: payout.unpaidLeaveDays,
           notMarkedDays: payout.notMarkedDays,
           deductedDates: payout.deductedDates,
+          halfDays: payout.halfDays,
+          payBasisDays: payout.payBasisDays,
+          debtInLines: payout.debtInLines,
+          payableAmount: payout.payableAmount,
           attendanceDeduction: Number(payout.attendanceDeduction || 0),
           earnedAmount: Number(payout.earnedAmount || 0),
           advance_deducted: Number(payout.advanceDeducted || 0),
@@ -1050,9 +1094,33 @@ export const useStore = create<StoreState>()(
           );
         }
 
+        // 6. Negative payable -> Debt carried to the next cycle. Stored as an open
+        //    advance-type record (the existing carry-forward), linked to this payout.
+        //    The next payout settles it (payoutId = the payout that used it).
+        const debtAmount = Math.round(Number(payout.carriedForwardAdvanceOut || 0) * 100) / 100;
+        const newDebts: SalaryAdvance[] = [];
+        if (debtAmount > 0 && !payout.isFinalSettlement) {
+          const cycleNo = (payout.cycleIndex ?? 0) + 1;
+          newDebts.push({
+            id: generateUUID(),
+            employeeId: payout.employeeId,
+            amount: debtAmount,
+            deducted_amount: 0,
+            date: payout.cycleEnd,
+            transactionDate: payout.cycleEnd,
+            status: 'Open',
+            kind: 'debt',
+            sourcePayoutId: paymentId,
+            debtFromCycleIndex: payout.cycleIndex,
+            reason: 'Debt carried forward from cycle #' + cycleNo,
+            created_at: now,
+            updated_at: now,
+          });
+        }
+
         set({
           employees: updatedEmployees,
-          salaryAdvances: updatedAdvances,
+          salaryAdvances: [...updatedAdvances, ...newDebts],
           borrows: updatedBorrows,
           salaryAdjustments: updatedAdjustments,
           salaryPayments: [...(state.salaryPayments || []), newPayment],
@@ -1082,6 +1150,15 @@ export const useStore = create<StoreState>()(
           return { success: false, error: 'Payment has already been reversed.' };
         }
 
+        // A debt this payout created may already have been used by a later payout.
+        const createdDebts = (state.salaryAdvances || []).filter((a) => a.sourcePayoutId === paymentId && !a.deleted_at);
+        const usedBy = createdDebts
+          .map((d) => (d.status === 'Settled' && d.payoutId ? (state.salaryPayments || []).find((p) => p.id === d.payoutId && p.status !== 'Reversed' && !p.deleted_at) : null))
+          .find(Boolean);
+        if (usedBy) {
+          return { success: false, error: 'The debt from this payout was already deducted on slip ' + (usedBy.slipNumber || usedBy.id) + '. Reverse that payout first.' };
+        }
+
         const now = new Date().toISOString();
 
         // 1. Mark payment as Reversed
@@ -1097,8 +1174,11 @@ export const useStore = create<StoreState>()(
             : p
         );
 
-        // 2. Re-open advances settled by this payout
+        // 2. Void the debt this payout created; re-open advances (and debts) it used
         const updatedAdvances = (state.salaryAdvances || []).map((adv) => {
+          if (adv.sourcePayoutId === paymentId) {
+            return { ...adv, status: 'Voided' as const, updated_at: now };
+          }
           if (adv.payoutId === paymentId) {
             return {
               ...adv,

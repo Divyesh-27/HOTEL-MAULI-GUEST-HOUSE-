@@ -4,7 +4,7 @@ import {
 } from '@/types';
 import {
   SalaryCycle, calculateCycleAttendance, calculateCycleFinancials,
-  formatDDMMYYYY, getDaysInMonth, diffDaysInclusive
+  formatDDMMYYYY, getDaysInMonth, diffDaysInclusive, PAY_BASIS_DAYS, formatShiftLabel
 } from './salaryCycleUtils';
 
 export interface SalarySlipItem {
@@ -40,15 +40,25 @@ export interface SalarySlipData {
   // Attendance
   presentDays: number;
   absentDays: number;
-  paidLeaveDays: number;
-  unpaidLeaveDays: number;
+  halfDays: number;
+  paidLeaveDays: number;   // legacy slips only
+  unpaidLeaveDays: number; // legacy slips only
   notMarkedDays: number;
-  deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }>;
+  deductedDates: Array<{ date: string; type: 'Absent' | 'Half Day' | 'Unpaid Leave'; amount: number }>;
 
   // Financials
   grossSalary: number;
   salaryUsed: number;
   perDayAmount: number;
+  /** 30 for the 30-day month basis; older slips used the cycle's day count. */
+  payBasisDays: number;
+  /** Debts deducted on this slip ("Debt carried forward from cycle #N"). */
+  debtInLines: Array<{ label: string; amount: number }>;
+  debtInTotal: number;
+  /** Debt carried to the next cycle when the payable is negative. */
+  debtOut: number;
+  /** Signed payable (negative = debt). netPaid is never below 0. */
+  payable: number;
   attendanceDeduction: number;
   earnedAmount: number;
 
@@ -108,7 +118,7 @@ export function formatIndianDate(dateStr?: string | null): string {
  */
 export function formatIndianCurrency(amount: number): string {
   const n = Number(amount) || 0;
-  return `₹${n.toLocaleString('en-IN')}`;
+  return `${n < 0 ? '-' : ''}₹${Math.abs(n).toLocaleString('en-IN')}`;
 }
 
 /**
@@ -199,7 +209,7 @@ export function calculateSalarySlipData(params: {
 
   const roleName = staffRoles.find(r => r.id === employee.roleId)?.name || 'Staff';
   const shiftObj = shifts.find(s => s.id === employee.shiftId);
-  const shiftName = shiftObj ? `${shiftObj.name} (${shiftObj.startTime} - ${shiftObj.endTime})` : 'Standard';
+  const shiftName = shiftObj ? formatShiftLabel(shiftObj) : 'Standard';
   const joiningDate = formatIndianDate(employee.joiningDate);
 
   // Match existing payment for this cycle/month
@@ -218,24 +228,30 @@ export function calculateSalarySlipData(params: {
   // Attendance & Deductions
   let presentDays = 0;
   let absentDays = 0;
+  let halfDays = 0;
   let paidLeaveDays = 0;
   let unpaidLeaveDays = 0;
   let notMarkedDays = 0;
-  let deductedDates: Array<{ date: string; type: 'Absent' | 'Unpaid Leave'; amount: number }> = [];
+  let deductedDates: SalarySlipData['deductedDates'] = [];
   let attendanceDeduction = 0;
   let grossSalary = employee.monthlySalary;
   let salaryUsed = employee.monthlySalary;
-  let perDayAmount = cycleDays > 0 ? Math.round((salaryUsed / cycleDays) * 100) / 100 : 0;
+  let payBasisDays = PAY_BASIS_DAYS;
+  let perDayAmount = Math.round((salaryUsed / PAY_BASIS_DAYS) * 100) / 100;
   let earnedAmount = salaryUsed;
+  let draftDeductedDays = 0;
 
   if (payment) {
     // Snapshot from finalized payment
     grossSalary = payment.gross;
     salaryUsed = payment.salaryUsed || payment.gross;
     cycleDays = payment.cycleDays || cycleDays;
-    perDayAmount = payment.perDay || (cycleDays > 0 ? Math.round((salaryUsed / cycleDays) * 100) / 100 : 0);
+    // Snapshot basis: older slips divided by the cycle's day count.
+    payBasisDays = payment.payBasisDays || cycleDays;
+    perDayAmount = payment.perDay || (payBasisDays > 0 ? Math.round((salaryUsed / payBasisDays) * 100) / 100 : 0);
     presentDays = payment.presentDays ?? 0;
     absentDays = payment.absentDays ?? 0;
+    halfDays = payment.halfDays ?? 0;
     paidLeaveDays = payment.paidLeaveDays ?? 0;
     unpaidLeaveDays = payment.unpaidLeaveDays ?? 0;
     notMarkedDays = payment.notMarkedDays ?? 0;
@@ -249,21 +265,20 @@ export function calculateSalarySlipData(params: {
       { startDate: cycleStart, endDate: cycleEnd, cycleDays },
       attendance
     );
+    // Legacy Paid/Unpaid Leave are already folded into present/absent.
     presentDays = attSummary.presentDays;
     absentDays = attSummary.absentDays;
-    paidLeaveDays = attSummary.paidLeaveDays;
-    unpaidLeaveDays = attSummary.unpaidLeaveDays;
+    halfDays = attSummary.halfDays;
     notMarkedDays = attSummary.notMarkedDays;
+    draftDeductedDays = attSummary.deductedDays;
     deductedDates = attSummary.deductedDates.map(d => ({
       date: d.date,
       type: d.type,
-      amount: perDayAmount,
+      amount: Math.round(perDayAmount * d.weight * 100) / 100,
     }));
-    const deductedPaise = cycleDays > 0
-      ? Math.round((salaryUsed * 100 * attSummary.deductedDays) / cycleDays)
-      : 0;
-    attendanceDeduction = deductedPaise / 100;
-    earnedAmount = Math.max(0, salaryUsed - attendanceDeduction);
+    const preview = calculateCycleFinancials(salaryUsed, cycleDays, draftDeductedDays, 0, 0, 0, 0);
+    attendanceDeduction = preview.deductionAmount;
+    earnedAmount = preview.earnedAmount;
   }
 
   // Advances & Borrows
@@ -301,10 +316,10 @@ export function calculateSalarySlipData(params: {
   }
   const bfTotal = bfAdvances + bfBorrows;
 
-  // This cycle's advances & borrows
+  // This cycle's advances & borrows (Debt records are listed separately as debt lines)
   const currentAdvances = empAdvances.filter(a => {
     const d = a.transactionDate || a.date;
-    return d >= cycleStart && d <= cycleEnd;
+    return a.kind !== 'debt' && d >= cycleStart && d <= cycleEnd;
   });
   const currentBorrows = empBorrows.filter(b => {
     const d = b.transactionDate || b.date;
@@ -393,17 +408,40 @@ export function calculateSalarySlipData(params: {
   let paidOn = '-';
   let paymentRef = '-';
   let note = '-';
+  let debtInLines: Array<{ label: string; amount: number }> = [];
+  let debtInTotal = 0;
+  let debtOut = 0;
+  let payable = 0;
 
   if (payment) {
-    totalAdvanceDeducted = payment.advance_deducted || 0;
+    // Slips on the 30-day basis store advances + debt in advance_deducted,
+    // with the debt part itemised in debtInLines. Older slips have neither.
+    debtInLines = (payment.debtInLines || []).map(l => ({ label: l.label, amount: l.amount }));
+    debtInTotal = debtInLines.reduce((s, l) => s + l.amount, 0);
+    debtOut = payment.payBasisDays ? Number(payment.carriedForwardAdvanceOut || 0) : 0;
+    totalAdvanceDeducted = Math.max(0, (payment.advance_deducted || 0) - debtInTotal);
     totalBorrowDeducted = payment.borrow_deducted || 0;
     adjustmentsTotal = payment.adjustmentsTotal || 0;
     adjustmentsList = (payment.adjustmentsApplied || []).map(a => ({ reason: a.reason, amount: a.amount }));
     netPaid = payment.net_paid;
+    payable = payment.payableAmount ?? payment.net_paid;
     paidOn = formatIndianDate(payment.paid_on);
     paymentRef = payment.payment_ref?.trim() ? payment.payment_ref : '-';
     note = payment.note?.trim() ? payment.note : '-';
   } else {
+    // Debt brought in: open balances from earlier cycles (the existing
+    // carry-forward), each listed on its own line.
+    debtInLines = empAdvances
+      .filter(a => a.status === 'Open' && (a.transactionDate || a.date) < cycleStart)
+      .map(a => ({
+        label: a.kind === 'debt'
+          ? (a.reason || 'Debt carried forward')
+          : `Advance brought forward (${formatIndianDate(a.transactionDate || a.date)})`,
+        amount: Math.max(0, a.amount - (a.deducted_amount || 0)),
+      }))
+      .filter(l => l.amount > 0);
+    debtInTotal = debtInLines.reduce((s, l) => s + l.amount, 0);
+
     // Draft financials
     const openAdjustments = salaryAdjustments.filter(
       a => a.employeeId === employee.id && a.status === 'Open' && !a.deleted_at
@@ -414,18 +452,20 @@ export function calculateSalarySlipData(params: {
     const fin = calculateCycleFinancials(
       employee.monthlySalary,
       cycleDays,
-      absentDays + unpaidLeaveDays,
+      draftDeductedDays,
       advancesTotalAmount,
-      bfAdvances,
+      debtInTotal,
       0, // borrows require explicit selection
       adjustmentsTotal
     );
-    totalAdvanceDeducted = fin.advanceDeducted;
+    totalAdvanceDeducted = fin.thisCycleAdvances;
     totalBorrowDeducted = 0;
     netPaid = fin.netPayable;
+    payable = fin.payable;
+    debtOut = fin.carriedForwardAdvanceOut;
   }
 
-  const totalDeductions = attendanceDeduction + totalAdvanceDeducted + totalBorrowDeducted;
+  const totalDeductions = attendanceDeduction + totalAdvanceDeducted + debtInTotal + totalBorrowDeducted;
 
   // Carried forward calculations (end of this cycle)
   let cfAdvances = 0;
@@ -474,6 +514,7 @@ export function calculateSalarySlipData(params: {
     joiningDate,
     presentDays,
     absentDays,
+    halfDays,
     paidLeaveDays,
     unpaidLeaveDays,
     notMarkedDays,
@@ -481,6 +522,11 @@ export function calculateSalarySlipData(params: {
     grossSalary,
     salaryUsed,
     perDayAmount,
+    payBasisDays,
+    debtInLines,
+    debtInTotal,
+    debtOut,
+    payable,
     attendanceDeduction,
     earnedAmount,
     bfAdvances,
@@ -820,14 +866,15 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         <div>
           <strong>Attendance (${data.cycleDays} Days in Cycle):</strong> 
           Present: <strong>${data.presentDays}</strong> &nbsp;|&nbsp; 
-          Absent: <strong>${data.absentDays}</strong> &nbsp;|&nbsp; 
-          Paid Leave: <strong>${data.paidLeaveDays}</strong> &nbsp;|&nbsp; 
-          Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong> &nbsp;|&nbsp; 
+          Absent: <strong>${data.absentDays}</strong> &nbsp;|&nbsp;
+          Half Day: <strong>${data.halfDays}</strong> &nbsp;|&nbsp;
+          ${data.paidLeaveDays > 0 ? `Paid Leave: <strong>${data.paidLeaveDays}</strong> &nbsp;|&nbsp; ` : ''}
+          ${data.unpaidLeaveDays > 0 ? `Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong> &nbsp;|&nbsp; ` : ''}
           Not Marked: <strong>${data.notMarkedDays}</strong> (paid in full)
         </div>
         ${data.deductedDates && data.deductedDates.length > 0 ? `
           <div class="deductions-list">
-            <strong>Deducted dates (${data.deductedDates.length} days @ ${formatIndianCurrency(data.perDayAmount)}/day):</strong>
+            <strong>Deducted dates (${data.deductedDates.length} days @ ${formatIndianCurrency(data.perDayAmount)}/day${data.payBasisDays === 30 ? ', 30-day month basis, half day = 0.5' : ''}):</strong>
             ${data.deductedDates.map(d => `${formatIndianDate(d.date)} (${d.type})`).join(', ')}
             &mdash; Total Attendance Deduction: <strong>-${formatIndianCurrency(data.attendanceDeduction)}</strong>
           </div>
@@ -844,11 +891,14 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         <div class="calc-formula-math">
           ${formatIndianCurrency(data.salaryUsed)} (Salary) 
           - ${formatIndianCurrency(data.attendanceDeduction)} (Attendance) 
-          - ${formatIndianCurrency(data.totalAdvanceDeducted)} (Advance) 
-          - ${formatIndianCurrency(data.totalBorrowDeducted)} (Borrow) 
-          ${data.adjustmentsTotal >= 0 ? `+ ${formatIndianCurrency(data.adjustmentsTotal)}` : `- ${formatIndianCurrency(Math.abs(data.adjustmentsTotal))}`} (Adjustments) 
-          = <strong>${formatIndianCurrency(data.netPaid)}</strong>
+          - ${formatIndianCurrency(data.totalAdvanceDeducted)} (Advance)
+          ${data.debtInTotal > 0 ? `- ${formatIndianCurrency(data.debtInTotal)} (Debt brought in) ` : ''}
+          ${data.adjustmentsTotal >= 0 ? `+ ${formatIndianCurrency(data.adjustmentsTotal)}` : `- ${formatIndianCurrency(Math.abs(data.adjustmentsTotal))}`} (Adjustments)
+          - ${formatIndianCurrency(data.totalBorrowDeducted)} (Borrow)
+          = <strong style="color: ${data.payable < 0 ? '#b91c1c' : 'inherit'};">${formatIndianCurrency(data.payable)}</strong>
+          ${data.debtOut > 0 ? `&rarr; Net paid ${formatIndianCurrency(data.netPaid)}, debt of ${formatIndianCurrency(data.debtOut)} carried to next cycle` : ''}
         </div>
+        ${data.payBasisDays === 30 ? `<div style="font-size: 8pt; color: #555; margin-top: 2px;">Per-day rate on a 30-day month basis: ${formatIndianCurrency(data.grossSalary)} &divide; 30 = ${formatIndianCurrency(data.perDayAmount)}/day.</div>` : ''}
       </div>
 
       <!-- 5. FINANCIAL SUMMARY & BALANCES -->
@@ -865,7 +915,7 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
             </div>
             <div class="summary-row">
               <span>Per Day Rate:</span>
-              <span>${formatIndianCurrency(data.perDayAmount)} / day</span>
+              <span>${formatIndianCurrency(data.perDayAmount)} / day${data.payBasisDays === 30 ? ' (monthly &divide; 30)' : ''}</span>
             </div>
             <div class="summary-row">
               <span>Attendance Deduction:</span>
@@ -881,6 +931,11 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
               <span>Total Advances Deducted:</span>
               <span>${formatTableCell(data.totalAdvanceDeducted)}</span>
             </div>
+            ${data.debtInLines.map(l => `
+            <div class="summary-row">
+              <span>${l.label}:</span>
+              <span style="color: #b91c1c;">-${formatIndianCurrency(l.amount)}</span>
+            </div>`).join('')}
             <div class="summary-row">
               <span>Total Borrow Deducted:</span>
               <span>${formatTableCell(data.totalBorrowDeducted)}</span>
@@ -898,6 +953,15 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
                 ${formatIndianCurrency(data.netPaid)}
               </span>
             </div>
+            ${data.debtOut > 0 ? `
+            <div class="summary-row">
+              <span>Payable before debt:</span>
+              <strong style="color: #b91c1c;">${formatIndianCurrency(data.payable)}</strong>
+            </div>
+            <div class="summary-row">
+              <span>Debt carried to next cycle:</span>
+              <strong style="color: #b91c1c;">${formatIndianCurrency(data.debtOut)}</strong>
+            </div>` : ''}
             <div class="summary-row">
               <span>Payment Status:</span>
               <strong>${data.statusText}</strong>
