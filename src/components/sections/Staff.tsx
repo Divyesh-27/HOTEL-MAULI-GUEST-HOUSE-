@@ -19,7 +19,7 @@ import {
   SalaryCycle, generateEmployeeCycles, calculateCycleAttendance, 
   calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive,
   CycleAttendanceSummary, AttendanceMark, PAY_BASIS_DAYS, normalizeAttendanceStatus, formatShiftLabel, formatRs,
-  projectDuePayouts, calculateFinalSettlement, cycleGrossSalary
+  projectDuePayouts, calculateFinalSettlement, cycleGrossSalary, findRecordBeforeDate, describeJoiningDateChange
 } from '@/utils/salaryCycleUtils';
 import {
   CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard
@@ -41,6 +41,7 @@ const Staff = () => {
     appRoles,
     addEmployee,
     updateEmployee,
+    changeJoiningDate,
     softDeleteEmployee,
     markAttendance,
     addShift,
@@ -74,6 +75,7 @@ const Staff = () => {
     appRoles: state.appRoles,
     addEmployee: state.addEmployee,
     updateEmployee: state.updateEmployee,
+    changeJoiningDate: state.changeJoiningDate,
     softDeleteEmployee: state.softDeleteEmployee,
     markAttendance: state.markAttendance,
     addShift: state.addShift,
@@ -1007,9 +1009,19 @@ const Staff = () => {
             setShowAddEditModal(false);
             setEditingEmployee(null);
           }}
-          onSave={async (empData, sensitiveData) => {
+          onSave={async (empData, sensitiveData, joiningChange) => {
             let targetId = editingEmployee ? editingEmployee.id : '';
             if (editingEmployee) {
+              if (joiningChange) {
+                const res = changeJoiningDate(editingEmployee.id, joiningChange.newDate, joiningChange.reason);
+                if (!res.success) {
+                  toast.error(res.error || 'Could not change the joining date');
+                  return;
+                }
+                toast.success(`Joining date changed to ${formatDDMMYYYY(joiningChange.newDate)}`);
+              } else if (empData.joiningDate !== editingEmployee.joiningDate) {
+                changeJoiningDate(editingEmployee.id, empData.joiningDate, '');
+              }
               updateEmployee(editingEmployee.id, empData);
               toast.success('Staff record updated');
             } else {
@@ -1889,7 +1901,9 @@ interface AddEditEmployeeModalProps {
   onClose: () => void;
   onSave: (
     empData: Omit<Employee, 'id' | 'created_at' | 'updated_at'>,
-    sensitiveData?: { aadhaarNumber?: string; aadhaarImage?: string; photo?: string }
+    sensitiveData?: { aadhaarNumber?: string; aadhaarImage?: string; photo?: string },
+    /** Set when the joining date changes after a payout (reason required, audit logged). */
+    joiningChange?: { newDate: string; reason: string }
   ) => void;
 }
 
@@ -1913,11 +1927,14 @@ const AddEditEmployeeModal = ({
   const [phone, setPhone] = useState(employee?.phone || '');
   const [address, setAddress] = useState(employee?.address || '');
   
-  // PRD Section 1: Joining date cannot be edited after first payout
-  const isJoiningDateLocked = useMemo(() => {
+  // Joining date is editable any time. After a payout, a change needs a reason
+  // and is checked and audit logged (paid cycles keep their stored dates).
+  const hasPayouts = useMemo(() => {
     if (!employee) return false;
     return (salaryPayments || []).some(p => p.employeeId === employee.id && p.status === 'Paid' && !p.deleted_at);
   }, [employee, salaryPayments]);
+  const [joiningReason, setJoiningReason] = useState('');
+  const joiningChangeNeedsReason = !!employee && hasPayouts && joiningDate !== employee.joiningDate;
 
   // Sensitive Vault Fields
   const [fullAadhaar, setFullAadhaar] = useState<string>(decryptedVaultData?.aadhaarNumber || '');
@@ -1947,6 +1964,25 @@ const AddEditEmployeeModal = ({
     e.preventDefault();
     if (!name.trim()) return;
 
+    let joiningChange: { newDate: string; reason: string } | undefined;
+    if (employee && joiningChangeNeedsReason) {
+      if (!joiningReason.trim()) {
+        toast.error('Enter a reason for changing the joining date.');
+        return;
+      }
+      const st = useStore.getState();
+      const before = findRecordBeforeDate(employee.id, joiningDate, st.attendance || [], st.salaryAdvances || [], st.borrows || []);
+      if (before) {
+        toast.error(`${before.label} is before ${formatDDMMYYYY(joiningDate)}. Choose a joining date on or before ${formatDDMMYYYY(before.date)}.`);
+        return;
+      }
+      const effect = describeJoiningDateChange(employee, joiningDate, salaryPayments);
+      if (!window.confirm(
+        `Change joining date from ${formatDDMMYYYY(employee.joiningDate)} to ${formatDDMMYYYY(joiningDate)}?\n\n${effect}\n\nReason: ${joiningReason.trim()}\nThis is recorded in the salary audit log.`
+      )) return;
+      joiningChange = { newDate: joiningDate, reason: joiningReason.trim() };
+    }
+
     const cleanAadhaar = fullAadhaar.replace(/\s+/g, '');
     const aadhaarLast4 = cleanAadhaar.length >= 4 ? cleanAadhaar.slice(-4) : (employee?.aadhaarLast4 || undefined);
 
@@ -1955,7 +1991,7 @@ const AddEditEmployeeModal = ({
       roleId,
       shiftId,
       monthlySalary: Number(salary) || 0,
-      joiningDate: isJoiningDateLocked && employee ? employee.joiningDate : joiningDate,
+      joiningDate,
       status: 'active',
       phone: phone.trim() || undefined,
       address: address.trim() || undefined,
@@ -1968,7 +2004,7 @@ const AddEditEmployeeModal = ({
       photo: photoBase64 || undefined
     };
 
-    onSave(empData, sensitiveData);
+    onSave(empData, sensitiveData, joiningChange);
   };
 
   return (
@@ -2044,17 +2080,24 @@ const AddEditEmployeeModal = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-foreground mb-1">
-                Joining Date {isJoiningDateLocked && <span className="text-amber-600 font-normal">(Locked after payout)</span>}
+                Joining Date {hasPayouts && <span className="text-muted-foreground font-normal">(change after payout needs a reason)</span>}
               </label>
               <input
                 type="date"
-                disabled={isJoiningDateLocked}
                 value={joiningDate}
                 onChange={e => setJoiningDate(e.target.value)}
-                className={`w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent ${
-                  isJoiningDateLocked ? 'opacity-60 cursor-not-allowed bg-secondary/50' : ''
-                }`}
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
               />
+              {joiningChangeNeedsReason && (
+                <input
+                  type="text"
+                  required
+                  placeholder="Reason for changing the joining date *"
+                  value={joiningReason}
+                  onChange={e => setJoiningReason(e.target.value)}
+                  className="w-full mt-2 px-3 py-2 bg-background border border-amber-500/50 rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              )}
             </div>
 
             <div>

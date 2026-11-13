@@ -693,6 +693,72 @@ export function calculateFinalSettlement(
 }
 
 /**
+ * Earliest attendance mark, advance or borrow of an employee dated before
+ * `date` (voided and deleted records ignored), or null if there is none.
+ * Used to refuse a joining date that would leave records before it.
+ */
+export function findRecordBeforeDate(
+  employeeId: string,
+  date: string,
+  attendance: AttendanceRecord[],
+  salaryAdvances: SalaryAdvance[],
+  borrows: BorrowRecord[]
+): { kind: 'Attendance' | 'Advance' | 'Borrow'; date: string; label: string } | null {
+  const found: Array<{ kind: 'Attendance' | 'Advance' | 'Borrow'; date: string; label: string }> = [];
+  for (const a of attendance) {
+    if (a.employeeId === employeeId && !a.deleted_at && a.date < date) {
+      found.push({ kind: 'Attendance', date: a.date, label: `Attendance (${a.status}) on ${formatDDMMYYYY(a.date)}` });
+    }
+  }
+  for (const a of salaryAdvances) {
+    const d = a.transactionDate || a.date;
+    if (a.employeeId === employeeId && !a.deleted_at && a.status !== 'Voided' && d < date) {
+      found.push({ kind: 'Advance', date: d, label: `${a.kind === 'debt' ? 'Debt' : 'Advance'} of ${formatRs(a.amount)} on ${formatDDMMYYYY(d)}` });
+    }
+  }
+  for (const b of borrows) {
+    const d = b.transactionDate || b.date;
+    if (b.employeeId === employeeId && !b.deleted_at && b.status !== 'Voided' && d < date) {
+      found.push({ kind: 'Borrow', date: d, label: `Borrow of ${formatRs(b.amount)} on ${formatDDMMYYYY(d)}` });
+    }
+  }
+  found.sort((x, y) => x.date.localeCompare(y.date));
+  return found[0] || null;
+}
+
+/**
+ * Plain-language effect of changing the joining date when payouts exist,
+ * for the confirmation dialog. Empty string when there are no paid cycles.
+ */
+export function describeJoiningDateChange(
+  employee: Employee,
+  newJoiningDate: string,
+  payments: SalaryPayment[],
+  todayStr?: string
+): string {
+  const today = todayStr || toLocalDateString();
+  const cycles = generateEmployeeCycles({ ...employee, joiningDate: newJoiningDate }, today, payments, []);
+  const paid = cycles.filter(c => c.status === 'Paid');
+  if (paid.length === 0) return '';
+  const lastPaid = paid[paid.length - 1];
+  const lines: string[] = [
+    `Paid slips keep their dates and amounts (${paid.length} paid cycle${paid.length === 1 ? '' : 's'}, the last ending ${formatDDMMYYYY(lastPaid.endDate)}).`,
+  ];
+  const before = cycles.find(c => c.endDate < paid[0].startDate && c.status !== 'Paid');
+  if (before) {
+    lines.push(`${formatDDMMYYYY(before.startDate)} to ${formatDDMMYYYY(before.endDate)} (before the first paid cycle) becomes a cycle paid by days: ${formatRs(cycleGrossSalary(employee.monthlySalary, before))}.`);
+  }
+  const next = cycles.find(c => c.startDate > lastPaid.endDate);
+  if (next) {
+    lines.push(next.isTransition
+      ? `Next cycle: ${formatDDMMYYYY(next.startDate)} to ${formatDDMMYYYY(next.endDate)}, a transition cycle of ${next.cycleDays} days paid ${formatRs(cycleGrossSalary(employee.monthlySalary, next))} (monthly x ${next.cycleDays} / 30) minus the usual deductions.`
+      : `Next cycle starts ${formatDDMMYYYY(next.startDate)} as usual.`);
+  }
+  lines.push(`After that, cycles start on day ${parseYYYYMMDD(newJoiningDate).day} of each month (or the month's last day).`);
+  return lines.join('\n');
+}
+
+/**
  * Generates next sequential slip number: SLIP-YYYY-####
  */
 export function generateSlipNumber(existingPayments: SalaryPayment[], year?: number): string {
