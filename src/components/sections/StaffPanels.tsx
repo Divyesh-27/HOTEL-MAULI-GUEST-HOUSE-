@@ -3,9 +3,9 @@
  * summary tiles, salary card, the Advances & Borrows box and Manage Shifts.
  */
 import { useEffect, useMemo, useState, FormEvent } from 'react';
-import { Check, Clock, Edit2, Plus, Save, Trash2, X, Moon } from 'lucide-react';
+import { Check, Clock, Edit2, Plus, Save, Trash2, X, Moon, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import { AttendanceRecord, BorrowRecord, Employee, SalaryAdvance, Shift } from '@/types';
+import { AttendanceRecord, BorrowRecord, Employee, SalaryAdvance, SalaryAuditEntry, Shift } from '@/types';
 import { NumberInput } from '@/components/ui/number-input';
 import {
   AttendanceMark, SalaryCycle, addDays, formatDDMMYYYY, formatTime12h, isOvernightShift,
@@ -539,6 +539,150 @@ export const ManageShiftsModal = ({
           <p className="text-xs text-muted-foreground -mt-2">Ends the next morning: {shiftTimesLabel(draft)} (overnight).</p>
         )}
       </div>
+    </div>
+  );
+};
+
+// ====================================================================
+// Owed by employee (final-settlement shortfall): Recovered / Written off
+// ====================================================================
+const AUDIT_LABEL: Record<SalaryAuditEntry['action'], string> = {
+  owed_debt_created: 'Owed amount recorded',
+  owed_debt_recovered: 'Recovered',
+  owed_debt_written_off: 'Written off',
+};
+
+const formatStamp = (iso: string) => {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+const OwedDebtRow = ({
+  debt, onResolve,
+}: {
+  debt: SalaryAdvance;
+  onResolve: (id: string, action: 'Recovered' | 'Written off', amount: number, reason: string) => { success: boolean; error?: string };
+}) => {
+  const remaining = Math.max(0, debt.amount - (debt.deducted_amount || 0));
+  const [amount, setAmount] = useState(remaining);
+  const [reason, setReason] = useState('');
+  const isOpen = debt.status === 'Open';
+
+  const act = (action: 'Recovered' | 'Written off') => {
+    if (!reason.trim()) { toast.error('Enter a reason first.'); return; }
+    if (action === 'Written off' && !window.confirm(`Write off ${formatRs(remaining)}? This is recorded in the audit log and cannot be undone.`)) return;
+    const res = onResolve(debt.id, action, action === 'Recovered' ? amount : remaining, reason);
+    if (res.success) {
+      toast.success(action === 'Recovered' ? `Recovered ${formatRs(amount)}` : `Written off ${formatRs(remaining)}`);
+      setReason('');
+    } else {
+      toast.error(res.error || 'Could not save');
+    }
+  };
+
+  const inputCls = 'px-2.5 py-1.5 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-accent';
+
+  return (
+    <div className="p-3 rounded-lg border border-border bg-background space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-foreground">{debt.reason || 'Owed by employee'}</p>
+          <p className="text-xs text-muted-foreground">
+            Recorded {formatDDMMYYYY(debt.transactionDate || debt.date)} · Original {formatRs(debt.amount)}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className={`text-xl font-bold ${isOpen ? 'text-destructive' : 'text-muted-foreground'}`}>{formatRs(isOpen ? remaining : 0)}</p>
+          <p className="text-[11px] font-semibold text-muted-foreground">{isOpen ? 'Still owed' : debt.status}</p>
+        </div>
+      </div>
+
+      {(debt.resolutions || []).length > 0 && (
+        <ul className="text-xs text-muted-foreground space-y-0.5 border-t border-border pt-2">
+          {(debt.resolutions || []).map((r, i) => (
+            <li key={i}>
+              {formatStamp(r.at)} · <strong className="text-foreground">{r.type}</strong> {formatRs(r.amount)} · {r.reason} · by {r.by}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {isOpen && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+          <NumberInput
+            min="0"
+            step="any"
+            value={amount}
+            onValueChange={setAmount}
+            className={`${inputCls} w-28 text-right`}
+            title="Amount recovered"
+          />
+          <input
+            type="text"
+            placeholder="Reason (required)"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            className={`${inputCls} flex-1 min-w-[12rem]`}
+          />
+          <button type="button" onClick={() => act('Recovered')} className="px-3 py-1.5 rounded-lg text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white">
+            Recovered
+          </button>
+          <button type="button" onClick={() => act('Written off')} className="px-3 py-1.5 rounded-lg text-sm font-bold border border-destructive/40 text-destructive hover:bg-destructive/10">
+            Written off
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const OwedByEmployeeCard = ({
+  debts, auditLog, onResolve,
+}: {
+  debts: SalaryAdvance[];
+  auditLog: SalaryAuditEntry[];
+  onResolve: (id: string, action: 'Recovered' | 'Written off', amount: number, reason: string) => { success: boolean; error?: string };
+}) => {
+  const openTotal = debts
+    .filter(d => d.status === 'Open')
+    .reduce((s, d) => s + Math.max(0, d.amount - (d.deducted_amount || 0)), 0);
+
+  return (
+    <div className="bg-card border-2 border-destructive/40 rounded-xl p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="font-bold text-foreground flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5 text-destructive" /> Owed by employee
+        </h4>
+        <span className={`text-lg font-bold ${openTotal > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
+          {openTotal > 0 ? `${formatRs(openTotal)} open` : 'Nothing open'}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Advances and debt that exceeded the final settlement. It stays open until it is recovered or written off, each with a reason.
+      </p>
+      {debts.map(d => <OwedDebtRow key={d.id} debt={d} onResolve={onResolve} />)}
+
+      {auditLog.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer font-semibold text-muted-foreground hover:text-foreground">Audit log ({auditLog.length})</summary>
+          <table className="w-full mt-2">
+            <tbody>
+              {[...auditLog].sort((a, b) => b.at.localeCompare(a.at)).map(e => (
+                <tr key={e.id} className="border-t border-border">
+                  <td className="py-1 pr-2 whitespace-nowrap font-mono">{formatStamp(e.at)}</td>
+                  <td className="py-1 pr-2 font-semibold text-foreground">{AUDIT_LABEL[e.action]}</td>
+                  <td className="py-1 pr-2 text-right">{formatRs(e.amount)}</td>
+                  <td className="py-1 pr-2 text-right text-muted-foreground">bal. {formatRs(e.balanceAfter)}</td>
+                  <td className="py-1 pr-2 text-muted-foreground">{e.reason || '-'}</td>
+                  <td className="py-1 text-muted-foreground">{e.by}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
     </div>
   );
 };

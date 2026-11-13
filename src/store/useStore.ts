@@ -5,7 +5,7 @@ import {
   InvoiceSettings, DEFAULT_INVOICE_SETTINGS, AppUser, AppRole, 
   DEFAULT_AC_TO_NON_AC_DISCOUNT_RATES, RoomHold,
   StaffRole, Shift, Employee, AttendanceRecord, SalaryAdvance, BorrowRecord, SalaryPayment,
-  SalaryDeductionLedgerItem, SalaryAdjustment,
+  SalaryDeductionLedgerItem, SalaryAdjustment, SalaryAuditEntry,
   RateMode, RoomModeRates, BookingRateSnapshot
 } from '@/types';
 import {
@@ -199,6 +199,8 @@ interface StoreState {
   salaryAdjustments: SalaryAdjustment[];
   salaryPayments: SalaryPayment[];
   salaryDeductionLedger: SalaryDeductionLedgerItem[];
+  /** Audit trail for money owed by employees. Persisted, append-only. */
+  salaryAuditLog: SalaryAuditEntry[];
 
   // Actions - Staff & Payroll (Modern)
   addStaffRole: (name: string) => StaffRole;
@@ -291,6 +293,8 @@ interface StoreState {
     note?: string;
   }) => { success: boolean; paymentId?: string; error?: string };
   executePayout: (payout: { employeeId: string; month: string; gross: number; advanceDeducted: number; borrowDeducted: number; netPaid: number; paidOn: string; paymentRef?: string; note?: string }) => { success: boolean; error?: string };
+  /** Record a recovery (partial or full) or a write-off of an owed debt. Reason required; audit logged. */
+  resolveOwedDebt: (debtId: string, action: 'Recovered' | 'Written off', amount: number, reason: string) => { success: boolean; error?: string };
   voidPayout: (paymentId: string) => { success: boolean; error?: string };
   
   // Actions - Admin
@@ -344,6 +348,10 @@ interface StoreState {
   getRoomStatus: (roomNo: string) => 'available' | 'occupied' | 'reserved' | 'cleaning' | 'maintenance';
 }
 
+/** Who performed an audited action. */
+const auditUser = (u: AppUser | 'master' | null): string =>
+  u === 'master' ? 'master' : (u && typeof u === 'object' ? (u.username || u.fullName || u.id) : 'unknown');
+
 export const useStore = create<StoreState>()(
   persist(
     (set, get) => ({
@@ -373,6 +381,7 @@ export const useStore = create<StoreState>()(
       salaryAdjustments: [],
       salaryPayments: [],
       salaryDeductionLedger: [],
+      salaryAuditLog: [],
       billCounter: { date: '', count: 0 },
       invoiceSettings: DEFAULT_INVOICE_SETTINGS,
       customBedTypes: ['Single Bed', 'Double Bed', 'Triple Bed', '4 Bed', '5 Bed', '6 Bed'],
@@ -1099,10 +1108,28 @@ export const useStore = create<StoreState>()(
         //    The next payout settles it (payoutId = the payout that used it).
         const debtAmount = Math.round(Number(payout.carriedForwardAdvanceOut || 0) * 100) / 100;
         const newDebts: SalaryAdvance[] = [];
-        if (debtAmount > 0 && !payout.isFinalSettlement) {
+        const newAudit: SalaryAuditEntry[] = [];
+        if (debtAmount > 0) {
           const cycleNo = (payout.cycleIndex ?? 0) + 1;
+          const debtId = generateUUID();
+          if (payout.isFinalSettlement) {
+            // Final settlement: the employee leaves owing this. It stays open on
+            // their profile until recovered or explicitly written off.
+            newAudit.push({
+              id: generateUUID(),
+              at: now,
+              by: auditUser(state.currentUser),
+              employeeId: payout.employeeId,
+              action: 'owed_debt_created',
+              recordId: debtId,
+              amount: debtAmount,
+              balanceAfter: debtAmount,
+              reason: 'Final settlement: advances and debt exceeded earnings (slip ' + slipNumber + ')',
+            });
+          }
           newDebts.push({
-            id: generateUUID(),
+            ...(payout.isFinalSettlement ? { owedByEmployee: true } : {}),
+            id: debtId,
             employeeId: payout.employeeId,
             amount: debtAmount,
             deducted_amount: 0,
@@ -1112,7 +1139,9 @@ export const useStore = create<StoreState>()(
             kind: 'debt',
             sourcePayoutId: paymentId,
             debtFromCycleIndex: payout.cycleIndex,
-            reason: 'Debt carried forward from cycle #' + cycleNo,
+            reason: payout.isFinalSettlement
+              ? 'Owed by employee (final settlement, slip ' + slipNumber + ')'
+              : 'Debt carried forward from cycle #' + cycleNo,
             created_at: now,
             updated_at: now,
           });
@@ -1121,6 +1150,7 @@ export const useStore = create<StoreState>()(
         set({
           employees: updatedEmployees,
           salaryAdvances: [...updatedAdvances, ...newDebts],
+          salaryAuditLog: [...(state.salaryAuditLog || []), ...newAudit],
           borrows: updatedBorrows,
           salaryAdjustments: updatedAdjustments,
           salaryPayments: [...(state.salaryPayments || []), newPayment],
@@ -1155,6 +1185,10 @@ export const useStore = create<StoreState>()(
         const usedBy = createdDebts
           .map((d) => (d.status === 'Settled' && d.payoutId ? (state.salaryPayments || []).find((p) => p.id === d.payoutId && p.status !== 'Reversed' && !p.deleted_at) : null))
           .find(Boolean);
+        const resolvedDebt = createdDebts.find((d) => (d.resolutions || []).length > 0);
+        if (resolvedDebt) {
+          return { success: false, error: 'This payout created an owed debt that already has recoveries or a write-off recorded. It cannot be reversed.' };
+        }
         if (usedBy) {
           return { success: false, error: 'The debt from this payout was already deducted on slip ' + (usedBy.slipNumber || usedBy.id) + '. Reverse that payout first.' };
         }
@@ -1352,6 +1386,45 @@ export const useStore = create<StoreState>()(
           salaryDeductionLedger: [...(state.salaryDeductionLedger || []), ...newLedgerItems],
         });
 
+        return { success: true };
+      },
+
+      resolveOwedDebt: (debtId, action, amount, reason) => {
+        const state = get();
+        const debt = (state.salaryAdvances || []).find((a) => a.id === debtId && !a.deleted_at);
+        if (!debt || debt.kind !== 'debt' || !debt.owedByEmployee) return { success: false, error: 'Owed debt not found.' };
+        if (debt.status !== 'Open') return { success: false, error: 'This debt is already closed.' };
+        const trimmed = (reason || '').trim();
+        if (!trimmed) return { success: false, error: 'A reason is required.' };
+        const remaining = Math.round((debt.amount - (debt.deducted_amount || 0)) * 100) / 100;
+        const value = action === 'Written off' ? remaining : Math.round((Number(amount) || 0) * 100) / 100;
+        if (!(value > 0)) return { success: false, error: 'Enter an amount above 0.' };
+        if (value > remaining) return { success: false, error: 'Amount is more than the ' + remaining + ' still owed.' };
+        const now = new Date().toISOString();
+        const by = auditUser(state.currentUser);
+        const balanceAfter = Math.round((remaining - value) * 100) / 100;
+        const updated: SalaryAdvance = {
+          ...debt,
+          // Recovered money reduces the balance; a write-off closes it without recovering anything.
+          deducted_amount: action === 'Recovered' ? (debt.deducted_amount || 0) + value : debt.deducted_amount,
+          status: action === 'Written off' ? 'Written off' : (balanceAfter <= 0 ? 'Settled' : 'Open'),
+          resolutions: [...(debt.resolutions || []), { type: action, amount: value, reason: trimmed, at: now, by }],
+          updated_at: now,
+        };
+        set({
+          salaryAdvances: state.salaryAdvances.map((a) => (a.id === debtId ? updated : a)),
+          salaryAuditLog: [...(state.salaryAuditLog || []), {
+            id: generateUUID(),
+            at: now,
+            by,
+            employeeId: debt.employeeId,
+            action: action === 'Recovered' ? 'owed_debt_recovered' : 'owed_debt_written_off',
+            recordId: debtId,
+            amount: value,
+            balanceAfter: action === 'Written off' ? 0 : balanceAfter,
+            reason: trimmed,
+          }],
+        });
         return { success: true };
       },
 
@@ -1929,6 +2002,7 @@ export const useStore = create<StoreState>()(
         salaryAdjustments: state.salaryAdjustments,
         salaryPayments: state.salaryPayments,
         salaryDeductionLedger: state.salaryDeductionLedger,
+        salaryAuditLog: state.salaryAuditLog,
         billCounter: state.billCounter,
         invoiceSettings: state.invoiceSettings,
         customBedTypes: state.customBedTypes,
@@ -2002,6 +2076,9 @@ export const useStore = create<StoreState>()(
           }
           if (!state.salaryPayments) {
             state.salaryPayments = [];
+          }
+          if (!state.salaryAuditLog) {
+            state.salaryAuditLog = [];
           }
           if (!state.salaryDeductionLedger) {
             state.salaryDeductionLedger = [];

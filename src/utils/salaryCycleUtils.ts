@@ -456,6 +456,102 @@ export function calculateCycleFinancials(
   };
 }
 
+/** Remaining (not yet deducted) balance of an advance or debt record. */
+const remainingOf = (a: SalaryAdvance) => Math.max(0, (Number(a.amount) || 0) - (Number(a.deducted_amount) || 0));
+
+/**
+ * What paying out an employee's Due cycles would actually pay, cycle by cycle
+ * in order, exactly as the Payout window computes it:
+ *   - debt brought in = open balances (advances / Debt records) dated before
+ *     the first due cycle, then whatever each payout carries forward
+ *   - cycle advances = non-debt, non-voided advances dated in that cycle
+ *   - open adjustments are applied once, on the first payout
+ *   - each cycle pays max(0, payable); borrow recovery is optional (0 here)
+ */
+export function projectDuePayouts(
+  employee: Employee,
+  dueCycles: Array<Pick<SalaryCycle, 'startDate' | 'endDate' | 'cycleDays' | 'cycleIndex'>>,
+  attendance: AttendanceRecord[],
+  salaryAdvances: SalaryAdvance[],
+  openAdjustmentsTotal: number,
+  todayStr?: string
+): { total: number; cycles: Array<{ cycleIndex: number; debtIn: number; advances: number; payable: number; netPayable: number }> } {
+  const sorted = [...dueCycles].sort((a, b) => a.startDate.localeCompare(b.startDate));
+  if (sorted.length === 0) return { total: 0, cycles: [] };
+
+  const own = salaryAdvances.filter(a => a.employeeId === employee.id && !a.deleted_at);
+  const dateOf = (a: SalaryAdvance) => a.transactionDate || a.date;
+
+  let carried = own
+    .filter(a => a.status === 'Open' && dateOf(a) < sorted[0].startDate)
+    .reduce((s, a) => s + remainingOf(a), 0);
+
+  let totalPaise = 0;
+  const cycles = sorted.map((c, i) => {
+    const att = calculateCycleAttendance(employee, c, attendance, todayStr);
+    const advances = own
+      .filter(a => a.kind !== 'debt' && a.status !== 'Voided' && dateOf(a) >= c.startDate && dateOf(a) <= c.endDate)
+      .reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    const fin = calculateCycleFinancials(
+      employee.monthlySalary, c.cycleDays, att.deductedDays, advances, carried, 0, i === 0 ? openAdjustmentsTotal : 0
+    );
+    totalPaise += Math.round(fin.netPayable * 100);
+    const row = { cycleIndex: c.cycleIndex, debtIn: carried, advances, payable: fin.payable, netPayable: fin.netPayable };
+    carried = fin.carriedForwardAdvanceOut;
+    return row;
+  });
+
+  return { total: totalPaise / 100, cycles };
+}
+
+export interface FinalSettlementSummary {
+  perDay: number;
+  payableDays: number;
+  earned: number;
+  /** Advances + debt brought in: all netted against the settlement. */
+  advanceDeducted: number;
+  borrowDeducted: number;
+  /** Signed result after borrows (negative = still owed). */
+  payable: number;
+  netPayable: number;
+  /** Unrecovered amount the employee still owes (recorded as an open debt). */
+  owedByEmployee: number;
+}
+
+/**
+ * Final settlement: earned = per-day (monthly / 30) x (days worked - deducted days).
+ * Advances and debt are netted in full; borrows are recovered only from a
+ * positive remainder. If advances + debt exceed what was earned, nothing is
+ * paid and the shortfall is owed by the employee — never silently forgiven.
+ */
+export function calculateFinalSettlement(
+  monthlySalary: number,
+  daysWorked: number,
+  deductedDays: number,
+  advancesAndDebt: number,
+  outstandingBorrows: number,
+  adjustmentsAmount: number
+): FinalSettlementSummary {
+  const toPaise = (n: number) => Math.round((Number(n) || 0) * 100);
+  const perDayPaise = Math.round(toPaise(monthlySalary) / PAY_BASIS_DAYS);
+  const payableDays = Math.max(0, (Number(daysWorked) || 0) - (Number(deductedDays) || 0));
+  const earnedPaise = Math.round(perDayPaise * payableDays);
+  const advPaise = toPaise(advancesAndDebt);
+  const beforeBorrowPaise = earnedPaise - advPaise + toPaise(adjustmentsAmount);
+  const borrowPaise = Math.min(Math.max(0, toPaise(outstandingBorrows)), Math.max(0, beforeBorrowPaise));
+  const payablePaise = beforeBorrowPaise - borrowPaise;
+  return {
+    perDay: perDayPaise / 100,
+    payableDays,
+    earned: earnedPaise / 100,
+    advanceDeducted: advPaise / 100,
+    borrowDeducted: borrowPaise / 100,
+    payable: payablePaise / 100,
+    netPayable: Math.max(0, payablePaise) / 100,
+    owedByEmployee: Math.max(0, -payablePaise) / 100,
+  };
+}
+
 /**
  * Generates next sequential slip number: SLIP-YYYY-####
  */

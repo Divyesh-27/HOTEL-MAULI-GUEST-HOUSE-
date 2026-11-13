@@ -18,10 +18,11 @@ import { NumberInput } from '@/components/ui/number-input';
 import { 
   SalaryCycle, generateEmployeeCycles, calculateCycleAttendance, 
   calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive,
-  CycleAttendanceSummary, AttendanceMark, PAY_BASIS_DAYS, normalizeAttendanceStatus, formatShiftLabel, formatRs
+  CycleAttendanceSummary, AttendanceMark, PAY_BASIS_DAYS, normalizeAttendanceStatus, formatShiftLabel, formatRs,
+  projectDuePayouts, calculateFinalSettlement
 } from '@/utils/salaryCycleUtils';
 import {
-  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal
+  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard
 } from './StaffPanels';
 
 const Staff = () => {
@@ -57,6 +58,8 @@ const Staff = () => {
     executeCyclePayout,
     reverseCyclePayout,
     finalSettlement,
+    salaryAuditLog,
+    resolveOwedDebt,
   } = useStore(useShallow(state => ({
     staffRoles: state.staffRoles,
     shifts: state.shifts,
@@ -89,6 +92,8 @@ const Staff = () => {
     executeCyclePayout: state.executeCyclePayout,
     reverseCyclePayout: state.reverseCyclePayout,
     finalSettlement: state.finalSettlement,
+    salaryAuditLog: state.salaryAuditLog,
+    resolveOwedDebt: state.resolveOwedDebt,
   })));
 
   // Today string
@@ -100,25 +105,31 @@ const Staff = () => {
     return employees.filter(e => e.status === 'active' && !e.deleted_at);
   }, [employees]);
 
+  // Former (inactive) staff stay reachable so money they owe remains visible
+  const [showFormerStaff, setShowFormerStaff] = useState(false);
+  const listEmployees = useMemo(() => {
+    return showFormerStaff ? employees.filter(e => !e.deleted_at) : activeEmployees;
+  }, [employees, activeEmployees, showFormerStaff]);
+
   const filteredEmployees = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return activeEmployees;
-    return activeEmployees.filter(e => 
+    if (!q) return listEmployees;
+    return listEmployees.filter(e => 
       e.name.toLowerCase().includes(q) || 
       (e.phone && e.phone.includes(q)) ||
       (e.aadhaarLast4 && e.aadhaarLast4.includes(q))
     );
-  }, [activeEmployees, searchQuery]);
+  }, [listEmployees, searchQuery]);
 
   const [selectedEmpId, setSelectedEmpId] = useState<string>('');
 
   useEffect(() => {
-    if (!selectedEmpId && activeEmployees.length > 0) {
-      setSelectedEmpId(activeEmployees[0].id);
-    } else if (selectedEmpId && !activeEmployees.some(e => e.id === selectedEmpId)) {
-      setSelectedEmpId(activeEmployees[0]?.id || '');
+    if (!selectedEmpId && listEmployees.length > 0) {
+      setSelectedEmpId(listEmployees[0].id);
+    } else if (selectedEmpId && !listEmployees.some(e => e.id === selectedEmpId)) {
+      setSelectedEmpId(listEmployees[0]?.id || '');
     }
-  }, [activeEmployees, selectedEmpId]);
+  }, [listEmployees, selectedEmpId]);
 
   const selectedEmployee = useMemo(() => {
     return employees.find(e => e.id === selectedEmpId) || null;
@@ -286,18 +297,14 @@ const Staff = () => {
     const due = new Set<string>();
     for (const emp of activeEmployees) {
       const dueCycles = generateEmployeeCycles(emp, todayStr, salaryPayments, attendance).filter(c => c.status === 'Due');
-      if (dueCycles.length > 0) due.add(emp.id);
-      for (const dc of dueCycles) {
-        const att = calculateCycleAttendance(emp, dc, attendance, todayStr);
-        const cycleAdvs = salaryAdvances
-          .filter(a => a.employeeId === emp.id && !a.deleted_at && a.kind !== 'debt' && a.status !== 'Voided'
-            && (a.transactionDate || a.date) >= dc.startDate && (a.transactionDate || a.date) <= dc.endDate)
-          .reduce((s, a) => s + (Number(a.amount) || 0), 0);
-        const openAdjs = (salaryAdjustments || [])
-          .filter(a => a.employeeId === emp.id && a.status === 'Open' && !a.deleted_at)
-          .reduce((s, a) => s + Number(a.amount || 0), 0);
-        total += calculateCycleFinancials(emp.monthlySalary, dc.cycleDays, att.deductedDays, cycleAdvs, 0, 0, openAdjs).netPayable;
-      }
+      if (dueCycles.length === 0) continue;
+      due.add(emp.id);
+      const openAdjs = (salaryAdjustments || [])
+        .filter(a => a.employeeId === emp.id && a.status === 'Open' && !a.deleted_at)
+        .reduce((s, a) => s + Number(a.amount || 0), 0);
+      // Same figures as the Payout window: debt and advances brought forward included,
+      // each cycle paid in order and never below 0.
+      total += projectDuePayouts(emp, dueCycles, attendance, salaryAdvances, openAdjs, todayStr).total;
     }
     return { totalPayableNow: Math.round(total * 100) / 100, dueEmployeeIds: due };
   }, [activeEmployees, todayStr, salaryPayments, attendance, salaryAdvances, salaryAdjustments]);
@@ -355,6 +362,27 @@ const Staff = () => {
       .filter(a => a.employeeId === selectedEmployee.id && a.kind === 'debt' && a.status === 'Open' && !a.deleted_at)
       .reduce((sum, a) => sum + Math.max(0, a.amount - (a.deducted_amount || 0)), 0);
   }, [selectedEmployee, salaryAdvances]);
+
+  // Money owed by employees after final settlement (open balance per employee)
+  const owedByEmployee = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of salaryAdvances) {
+      if (a.owedByEmployee && a.status === 'Open' && !a.deleted_at) {
+        m.set(a.employeeId, (m.get(a.employeeId) || 0) + Math.max(0, a.amount - (a.deducted_amount || 0)));
+      }
+    }
+    return m;
+  }, [salaryAdvances]);
+
+  const selectedOwedDebts = useMemo(() => {
+    if (!selectedEmployee) return [];
+    return salaryAdvances.filter(a => a.employeeId === selectedEmployee.id && a.owedByEmployee && !a.deleted_at && a.status !== 'Voided');
+  }, [selectedEmployee, salaryAdvances]);
+
+  const selectedAuditLog = useMemo(() => {
+    if (!selectedEmployee) return [];
+    return (salaryAuditLog || []).filter(e => e.employeeId === selectedEmployee.id);
+  }, [selectedEmployee, salaryAuditLog]);
 
   // Salary figures for the selected cycle: the paid snapshot for paid cycles, live otherwise
   const salaryView = useMemo(() => {
@@ -528,7 +556,11 @@ const Staff = () => {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-bold text-foreground">Staff Members</h3>
-                <p className="text-xs text-muted-foreground">{filteredEmployees.length} registered</p>
+                <p className="text-xs text-muted-foreground">{filteredEmployees.length} {showFormerStaff ? 'incl. former staff' : 'registered'}</p>
+                <label className="flex items-center gap-1.5 mt-1 text-[11px] text-muted-foreground cursor-pointer select-none">
+                  <input type="checkbox" checked={showFormerStaff} onChange={e => setShowFormerStaff(e.target.checked)} className="rounded border-border" />
+                  Show former staff
+                </label>
               </div>
               {/* Double plus bug fix: "Add Staff" instead of "+ Add Staff" */}
               <button
@@ -579,6 +611,12 @@ const Staff = () => {
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-sm">{emp.name}</span>
+                          {emp.status === 'inactive' && (
+                            <span className="text-[9px] font-bold px-1.5 rounded-full bg-secondary text-muted-foreground border border-border">Inactive</span>
+                          )}
+                          {(owedByEmployee.get(emp.id) || 0) > 0 && (
+                            <span className="text-[9px] font-bold px-1.5 rounded-full bg-destructive/15 text-destructive border border-destructive/30">Owes {formatRs(owedByEmployee.get(emp.id) || 0)}</span>
+                          )}
                           {hasDue && (
                             <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
                               isSelected ? 'bg-amber-400 text-black' : 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30'
@@ -650,6 +688,11 @@ const Staff = () => {
                       <span className="text-xs font-semibold uppercase px-2.5 py-0.5 rounded-full bg-secondary text-secondary-foreground border border-border">
                         {getRoleName(selectedEmployee.roleId)}
                       </span>
+                      {selectedEmployee.status === 'inactive' && (
+                        <span className="text-xs font-bold uppercase px-2.5 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border">
+                          Inactive{selectedEmployee.lastWorkingDate ? ' since ' + formatDDMMYYYY(selectedEmployee.lastWorkingDate) : ''}
+                        </span>
+                      )}
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary/50 border border-border text-muted-foreground">
                         {getShiftName(selectedEmployee.shiftId)}
                       </span>
@@ -710,7 +753,7 @@ const Staff = () => {
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Reverse Payout</span>
                       </button>
-                    ) : (
+                    ) : selectedEmployee.status === 'active' && (
                       <button
                         onClick={() => setShowPayoutModal(true)}
                         className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-sm"
@@ -721,6 +764,7 @@ const Staff = () => {
                       </button>
                     )}
 
+                    {selectedEmployee.status === 'active' && (
                     <button
                       onClick={() => setShowFinalSettlementModal(true)}
                       className="flex items-center gap-1.5 border border-border hover:bg-secondary text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-lg text-xs transition-colors"
@@ -728,10 +772,15 @@ const Staff = () => {
                     >
                       <span>Final Settlement</span>
                     </button>
+                    )}
                   </div>
                 </div>
 
               </div>
+
+              {selectedOwedDebts.length > 0 && (
+                <OwedByEmployeeCard debts={selectedOwedDebts} auditLog={selectedAuditLog} onResolve={resolveOwedDebt} />
+              )}
 
               {/* Attendance for the selected salary cycle */}
               <div className="bg-card text-card-foreground rounded-xl shadow-sm border border-border p-5 space-y-4">
@@ -1634,6 +1683,18 @@ const ReversePayoutModal = ({ payment, onClose, onConfirm }: ReversePayoutModalP
 // ====================================================================
 // SUB-COMPONENT: FinalSettlementModal (PRD Section 7)
 // ====================================================================
+/** Spreads a capped borrow recovery across borrows in order (never more than each balance). */
+const allocateBorrowRecovery = (borrowsList: BorrowRecord[], total: number) => {
+  let left = Math.round(total * 100) / 100;
+  return borrowsList
+    .map(b => {
+      const amount = Math.min(Math.max(0, b.amount - (b.repaid_amount || 0)), left);
+      left = Math.round((left - amount) * 100) / 100;
+      return { borrowId: b.id, amount, reason: b.reason };
+    })
+    .filter(r => r.amount > 0);
+};
+
 interface FinalSettlementModalProps {
   employee: Employee;
   cycle: SalaryCycle;
@@ -1670,30 +1731,36 @@ const FinalSettlementModal = ({
   // 30-day month basis for every cycle
   const perDay = Math.round((employee.monthlySalary / PAY_BASIS_DAYS) * 100) / 100;
 
-  // PRD Section 7: earned = perDay * (days worked - deducted days)
-  const payableDays = Math.max(0, daysWorked - cycleAttendance.deductedDays);
-  const earnedPaise = Math.round(perDay * 100 * payableDays);
-  const earnedAmount = earnedPaise / 100;
-
-  // Total advances
-  const advancesTotal = advancesInCycle.reduce((s, a) => s + (Number(a.amount) || 0), 0) +
-    priorAdvances.reduce((s, a) => s + Math.max(0, a.amount - (a.deducted_amount || 0)), 0);
-  const advanceDeducted = Math.min(earnedAmount, advancesTotal);
-
-  // Borrows
+  // Advances in the cycle + debt / advances brought forward
+  const debtInLines = priorAdvances
+    .map(a => ({
+      id: a.id,
+      label: a.kind === 'debt' ? (a.reason || 'Debt carried forward') : 'Advance brought forward (' + formatDDMMYYYY(a.transactionDate || a.date) + ')',
+      amount: Math.max(0, a.amount - (a.deducted_amount || 0)),
+    }))
+    .filter(l => l.amount > 0);
+  const debtInTotal = debtInLines.reduce((s, l) => s + l.amount, 0);
+  const advancesTotal = advancesInCycle.reduce((s, a) => s + (Number(a.amount) || 0), 0) + debtInTotal;
   const totalBorrows = outstandingBorrows.reduce((s, b) => s + Math.max(0, b.amount - (b.repaid_amount || 0)), 0);
-  const remaining = earnedAmount - advanceDeducted;
-  const borrowDeducted = Math.min(remaining, totalBorrows);
-
-  // Adjustments
   const adjustmentsTotal = openAdjustments.reduce((s, a) => s + Number(a.amount || 0), 0);
 
-  const netPayable = Math.max(0, remaining - borrowDeducted + adjustmentsTotal);
+  // earned = per-day x (days worked - deducted days); a shortfall is owed, never forgiven
+  const settlement = calculateFinalSettlement(
+    employee.monthlySalary, daysWorked, cycleAttendance.deductedDays, advancesTotal, totalBorrows, adjustmentsTotal
+  );
+  const payableDays = settlement.payableDays;
+  const earnedAmount = settlement.earned;
+  const advanceDeducted = settlement.advanceDeducted;
+  const borrowDeducted = settlement.borrowDeducted;
+  const netPayable = settlement.netPayable;
+  const owedAmount = settlement.owedByEmployee;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const conf = window.confirm(
-      `Final settlement will deactivate ${employee.name} and finalize all payroll records. Proceed?`
+      `Final settlement will deactivate ${employee.name} and finalize all payroll records.` +
+      (owedAmount > 0 ? `\n\n${employee.name} will still owe ${formatRs(owedAmount)}. It is recorded as an open debt on their profile.` : '') +
+      '\n\nProceed?'
     );
     if (!conf) return;
 
@@ -1716,14 +1783,13 @@ const FinalSettlementModal = ({
       attendanceDeduction: Math.round(perDay * 100 * cycleAttendance.deductedDays) / 100,
       earnedAmount,
       advanceDeducted,
-      carriedForwardAdvanceIn: 0,
-      carriedForwardAdvanceOut: Math.max(0, advancesTotal - advanceDeducted),
+      carriedForwardAdvanceIn: debtInTotal,
+      carriedForwardAdvanceOut: owedAmount, // recorded as an open 'Owed by employee' debt
+      debtInLines,
+      payableAmount: settlement.payable,
+      cycleIndex: cycle.cycleIndex,
       borrowDeducted,
-      borrowRecoveries: outstandingBorrows.map(b => ({
-        borrowId: b.id,
-        amount: Math.min(borrowDeducted, Math.max(0, b.amount - (b.repaid_amount || 0))),
-        reason: b.reason
-      })),
+      borrowRecoveries: allocateBorrowRecovery(outstandingBorrows, borrowDeducted),
       adjustmentsTotal,
       adjustmentsApplied: openAdjustments.map(a => ({ id: a.id, amount: a.amount, reason: a.reason })),
       netPaid: netPayable,
@@ -1773,8 +1839,8 @@ const FinalSettlementModal = ({
               <span>₹{earnedAmount.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
-              <span>Advances Deducted:</span>
-              <span>-₹{advanceDeducted.toLocaleString('en-IN')}</span>
+              <span>Advances & Debt Deducted:</span>
+              <span>-{formatRs(advanceDeducted)}</span>
             </div>
             <div className="flex justify-between text-muted-foreground">
               <span>Borrows Recovered:</span>
@@ -1788,8 +1854,15 @@ const FinalSettlementModal = ({
 
           <div className="p-3 bg-primary text-primary-foreground rounded-xl flex items-center justify-between">
             <span className="font-bold text-xs uppercase">Net Final Settlement Pay</span>
-            <span className="text-xl font-black">₹{netPayable.toLocaleString('en-IN')}</span>
+            <span className="text-xl font-black">{formatRs(netPayable)}</span>
           </div>
+
+          {owedAmount > 0 && (
+            <div className="p-3 rounded-xl border border-destructive/40 bg-destructive/10 text-xs text-destructive space-y-1">
+              <p className="font-bold text-sm">Owed by employee: {formatRs(owedAmount)}</p>
+              <p>Advances and debt exceed what was earned. Nothing is paid, and this amount stays open on {employee.name}'s profile until it is recovered or written off.</p>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div>

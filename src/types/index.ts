@@ -169,7 +169,7 @@ export interface SalaryAdvance {
   deducted_amount: number; // Tracker for how much has been deducted
   date: string; // YYYY-MM-DD (legacy / display)
   transactionDate?: string; // YYYY-MM-DD (decides the cycle)
-  status?: 'Open' | 'Settled' | 'Voided';
+  status?: 'Open' | 'Settled' | 'Voided' | 'Written off';
   payoutId?: string | null; // payout that settled (used) this record
   reason?: string;
   /** 'debt' = negative payable carried to the next cycle (shown as "Debt"). */
@@ -178,6 +178,10 @@ export interface SalaryAdvance {
   sourcePayoutId?: string | null;
   /** 0-based index of the cycle whose payout created this debt. */
   debtFromCycleIndex?: number;
+  /** Final-settlement shortfall: money the (former) employee still owes. Never forgiven silently. */
+  owedByEmployee?: boolean;
+  /** Recoveries / write-off of an owed debt, each with a reason. */
+  resolutions?: Array<{ type: 'Recovered' | 'Written off'; amount: number; reason: string; at: string; by: string }>;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -258,6 +262,19 @@ export interface SalaryPayment {
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
+}
+
+/** Audit trail for money owed by employees (created, recovered, written off). */
+export interface SalaryAuditEntry {
+  id: string;
+  at: string; // ISO timestamp
+  by: string; // username or 'master'
+  employeeId: string;
+  action: 'owed_debt_created' | 'owed_debt_recovered' | 'owed_debt_written_off';
+  recordId: string; // SalaryAdvance id of the owed debt
+  amount: number;
+  balanceAfter: number;
+  reason?: string;
 }
 
 export interface SalaryDeductionLedgerItem {
