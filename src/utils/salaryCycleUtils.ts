@@ -726,36 +726,102 @@ export function findRecordBeforeDate(
   return found[0] || null;
 }
 
+export interface JoiningDateChangeEffect {
+  /** Unpaid cycles that exist only after the change. */
+  created: Array<{ startDate: string; endDate: string; cycleDays: number; status: SalaryCycle['status']; isTransition: boolean; gross: number; addsToPayableNow: number }>;
+  /** Unpaid cycles that disappear with the change. */
+  replaced: Array<{ startDate: string; endDate: string; cycleDays: number; status: SalaryCycle['status'] }>;
+  payableNowBefore: number;
+  payableNowAfter: number;
+  /** Former staff are not part of Payable Now. */
+  inPayableNow: boolean;
+  text: string;
+}
+
 /**
- * Plain-language effect of changing the joining date when payouts exist,
- * for the confirmation dialog. Empty string when there are no paid cycles.
+ * Exactly what changing the joining date does when payouts exist, for the
+ * confirmation: cycles created and replaced (paid cycles never change), what
+ * each new due cycle adds to Payable Now, and this employee's Payable Now
+ * before and after (same projection as the top card). Null without payouts.
  */
 export function describeJoiningDateChange(
   employee: Employee,
   newJoiningDate: string,
   payments: SalaryPayment[],
+  attendance: AttendanceRecord[],
+  salaryAdvances: SalaryAdvance[],
+  openAdjustmentsTotal: number,
   todayStr?: string
-): string {
+): JoiningDateChangeEffect | null {
   const today = todayStr || toLocalDateString();
-  const cycles = generateEmployeeCycles({ ...employee, joiningDate: newJoiningDate }, today, payments, []);
-  const paid = cycles.filter(c => c.status === 'Paid');
-  if (paid.length === 0) return '';
+  const changed = { ...employee, joiningDate: newJoiningDate };
+  const before = generateEmployeeCycles(employee, today, payments, attendance);
+  const after = generateEmployeeCycles(changed, today, payments, attendance);
+  const paid = after.filter(c => c.status === 'Paid');
+  if (paid.length === 0) return null;
+
+  const key = (c: SalaryCycle) => `${c.startDate}|${c.endDate}`;
+  const beforeKeys = new Set(before.map(key));
+  const afterKeys = new Set(after.map(key));
+  const inPayableNow = employee.status === 'active' && !employee.deleted_at;
+
+  const project = (emp: Employee, cycles: SalaryCycle[]) =>
+    projectDuePayouts(emp, cycles.filter(c => c.status === 'Due'), attendance, salaryAdvances, openAdjustmentsTotal, today);
+  const projBefore = project(employee, before);
+  const projAfter = project(changed, after);
+  const payableNowBefore = inPayableNow ? projBefore.total : 0;
+  const payableNowAfter = inPayableNow ? projAfter.total : 0;
+
+  const created = after
+    .filter(c => c.status !== 'Paid' && !beforeKeys.has(key(c)))
+    .map(c => ({
+      startDate: c.startDate,
+      endDate: c.endDate,
+      cycleDays: c.cycleDays,
+      status: c.status,
+      isTransition: !!c.isTransition,
+      gross: cycleGrossSalary(employee.monthlySalary, c),
+      addsToPayableNow: inPayableNow && c.status === 'Due'
+        ? (projAfter.cycles.find(p => p.cycleIndex === c.cycleIndex)?.netPayable ?? 0)
+        : 0,
+    }));
+  const replaced = before
+    .filter(c => c.status !== 'Paid' && !afterKeys.has(key(c)))
+    .map(c => ({ startDate: c.startDate, endDate: c.endDate, cycleDays: c.cycleDays, status: c.status }));
+
   const lastPaid = paid[paid.length - 1];
+  const range = (c: { startDate: string; endDate: string; cycleDays: number }) =>
+    `${formatDDMMYYYY(c.startDate)} to ${formatDDMMYYYY(c.endDate)} (${c.cycleDays} days)`;
   const lines: string[] = [
-    `Paid slips keep their dates and amounts (${paid.length} paid cycle${paid.length === 1 ? '' : 's'}, the last ending ${formatDDMMYYYY(lastPaid.endDate)}).`,
+    `Paid cycles are not changed: ${paid.length} paid cycle${paid.length === 1 ? '' : 's'}, the last ending ${formatDDMMYYYY(lastPaid.endDate)}.`,
+    '',
   ];
-  const before = cycles.find(c => c.endDate < paid[0].startDate && c.status !== 'Paid');
-  if (before) {
-    lines.push(`${formatDDMMYYYY(before.startDate)} to ${formatDDMMYYYY(before.endDate)} (before the first paid cycle) becomes a cycle paid by days: ${formatRs(cycleGrossSalary(employee.monthlySalary, before))}.`);
+  if (created.length === 0) {
+    lines.push('No new cycles are created.');
+  } else {
+    lines.push(`Cycles created (${created.length}):`);
+    for (const c of created) {
+      const kind = c.isTransition ? 'transition, paid by days' : 'normal';
+      const effect = c.status === 'Due'
+        ? (inPayableNow ? `adds ${formatRs(c.addsToPayableNow)} to Payable Now` : 'due (former staff, not in Payable Now)')
+        : 'not due yet, adds nothing to Payable Now today';
+      lines.push(`- ${range(c)}, ${kind}, gross ${formatRs(c.gross)}: ${effect}`);
+    }
   }
-  const next = cycles.find(c => c.startDate > lastPaid.endDate);
-  if (next) {
-    lines.push(next.isTransition
-      ? `Next cycle: ${formatDDMMYYYY(next.startDate)} to ${formatDDMMYYYY(next.endDate)}, a transition cycle of ${next.cycleDays} days paid ${formatRs(cycleGrossSalary(employee.monthlySalary, next))} (monthly x ${next.cycleDays} / 30) minus the usual deductions.`
-      : `Next cycle starts ${formatDDMMYYYY(next.startDate)} as usual.`);
+  if (replaced.length > 0) {
+    lines.push('', `Cycles replaced (${replaced.length}):`);
+    for (const c of replaced) lines.push(`- ${range(c)}, was ${c.status}`);
+  }
+  lines.push('');
+  if (inPayableNow) {
+    const delta = Math.round((payableNowAfter - payableNowBefore) * 100) / 100;
+    lines.push(`Payable Now for ${employee.name}: ${formatRs(payableNowBefore)} -> ${formatRs(payableNowAfter)} (${delta >= 0 ? '+' : ''}${formatRs(delta)}).`);
+  } else {
+    lines.push(`${employee.name} is former staff, so Payable Now does not change.`);
   }
   lines.push(`After that, cycles start on day ${parseYYYYMMDD(newJoiningDate).day} of each month (or the month's last day).`);
-  return lines.join('\n');
+
+  return { created, replaced, payableNowBefore, payableNowAfter, inPayableNow, text: lines.join('\n') };
 }
 
 /**

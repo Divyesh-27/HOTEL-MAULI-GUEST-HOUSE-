@@ -1980,7 +1980,12 @@ const AddEditEmployeeModal = ({
         toast.error(`${before.label} is before ${formatDDMMYYYY(joiningDate)}. Choose a joining date on or before ${formatDDMMYYYY(before.date)}.`);
         return;
       }
-      const effect = describeJoiningDateChange(employee, joiningDate, salaryPayments);
+      const openAdj = (st.salaryAdjustments || [])
+        .filter(x => x.employeeId === employee.id && x.status === 'Open' && !x.deleted_at)
+        .reduce((sum, x) => sum + Number(x.amount || 0), 0);
+      const effect = describeJoiningDateChange(
+        employee, joiningDate, salaryPayments, st.attendance || [], st.salaryAdvances || [], openAdj
+      )?.text || '';
       if (!window.confirm(
         `Change joining date from ${formatDDMMYYYY(employee.joiningDate)} to ${formatDDMMYYYY(joiningDate)}?\n\n${effect}\n\nReason: ${joiningReason.trim()}\nThis is recorded in the salary audit log.`
       )) return;
