@@ -84,7 +84,7 @@ const DayMarkPopup = ({
             disabled={!current}
             className="text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-40 disabled:no-underline"
           >
-            Unmark
+            Unmark (back to default Present)
           </button>
         </div>
       </div>
@@ -136,16 +136,17 @@ export const CycleAttendanceGrid = ({
         {days.map((dateStr, i) => {
           const raw = marks.get(dateStr);
           const status = normalizeAttendanceStatus(raw);
-          const isSunday = dayOfWeek(dateStr) === 0;
           const disabled = dateStr < employee.joiningDate || dateStr > todayStr;
+          // Every day is a working day; an unmarked past/current day is Present by default.
+          const isDefaultPresent = !status && !disabled;
           const [, m, d] = dateStr.split('-').map(Number);
           const showMonth = i === 0 || d === 1;
           const legacy = raw === 'Paid Leave' || raw === 'Unpaid Leave' ? raw : null;
 
           const style = status
             ? MARK_STYLE[status]
-            : isSunday
-              ? 'bg-muted/60 border-border text-muted-foreground'
+            : isDefaultPresent
+              ? 'bg-emerald-500/5 border-dashed border-emerald-500/30 text-emerald-700/80 dark:text-emerald-400/80'
               : 'bg-card border-border text-foreground';
 
           return (
@@ -154,7 +155,9 @@ export const CycleAttendanceGrid = ({
               type="button"
               disabled={disabled}
               onClick={() => setOpenDay(dateStr)}
-              title={disabled ? (dateStr > todayStr ? 'Future day' : 'Before joining') : `Mark ${formatDDMMYYYY(dateStr)}`}
+              title={disabled
+                ? (dateStr > todayStr ? 'Future day' : 'Before joining')
+                : `${formatDDMMYYYY(dateStr)}: ${status ? status : 'Present (default, not marked)'}`}
               className={`h-20 rounded-xl border-2 flex flex-col items-center justify-center transition-all ${style} ${
                 disabled ? 'opacity-35 cursor-not-allowed' : 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer'
               } ${dateStr === todayStr ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}`}
@@ -164,7 +167,7 @@ export const CycleAttendanceGrid = ({
                 {showMonth && <span className="text-[10px] font-semibold ml-1 align-top opacity-70">{MONTHS[m - 1]}</span>}
               </span>
               <span className="text-[11px] font-semibold mt-1">
-                {status || (isSunday ? 'Off' : '')}
+                {status || (isDefaultPresent ? 'Present' : '')}
                 {legacy && <span className="opacity-70"> ({legacy})</span>}
               </span>
             </button>
@@ -188,8 +191,8 @@ export const CycleAttendanceGrid = ({
 // Big summary tiles + salary card
 // ====================================================================
 export const AttendanceSummaryTiles = ({
-  present, halfDays, absent, notMarked,
-}: { present: number; halfDays: number; absent: number; notMarked: number }) => {
+  present, halfDays, absent,
+}: { present: number; halfDays: number; absent: number }) => {
   const tile = (label: string, value: number, cls: string) => (
     <div className="bg-card border border-border rounded-xl p-4 text-center">
       <p className="text-xs uppercase font-bold text-muted-foreground">{label}</p>
@@ -197,11 +200,10 @@ export const AttendanceSummaryTiles = ({
     </div>
   );
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+    <div className="grid grid-cols-3 gap-3">
       {tile('Present', present, 'text-emerald-600 dark:text-emerald-400')}
       {tile('Half Day', halfDays, 'text-amber-600 dark:text-amber-400')}
       {tile('Absent', absent, 'text-destructive')}
-      {tile('Not marked', notMarked, 'text-foreground')}
     </div>
   );
 };
@@ -550,6 +552,7 @@ const AUDIT_LABEL: Record<SalaryAuditEntry['action'], string> = {
   owed_debt_created: 'Owed amount recorded',
   owed_debt_recovered: 'Recovered',
   owed_debt_written_off: 'Written off',
+  joining_date_changed: 'Joining date changed',
 };
 
 const formatStamp = (iso: string) => {
@@ -639,10 +642,9 @@ const OwedDebtRow = ({
 };
 
 export const OwedByEmployeeCard = ({
-  debts, auditLog, onResolve,
+  debts, onResolve,
 }: {
   debts: SalaryAdvance[];
-  auditLog: SalaryAuditEntry[];
   onResolve: (id: string, action: 'Recovered' | 'Written off', amount: number, reason: string) => { success: boolean; error?: string };
 }) => {
   const openTotal = debts
@@ -664,25 +666,49 @@ export const OwedByEmployeeCard = ({
       </p>
       {debts.map(d => <OwedDebtRow key={d.id} debt={d} onResolve={onResolve} />)}
 
-      {auditLog.length > 0 && (
-        <details className="text-xs">
-          <summary className="cursor-pointer font-semibold text-muted-foreground hover:text-foreground">Audit log ({auditLog.length})</summary>
-          <table className="w-full mt-2">
-            <tbody>
-              {[...auditLog].sort((a, b) => b.at.localeCompare(a.at)).map(e => (
-                <tr key={e.id} className="border-t border-border">
-                  <td className="py-1 pr-2 whitespace-nowrap font-mono">{formatStamp(e.at)}</td>
-                  <td className="py-1 pr-2 font-semibold text-foreground">{AUDIT_LABEL[e.action]}</td>
-                  <td className="py-1 pr-2 text-right">{formatRs(e.amount)}</td>
-                  <td className="py-1 pr-2 text-right text-muted-foreground">bal. {formatRs(e.balanceAfter)}</td>
-                  <td className="py-1 pr-2 text-muted-foreground">{e.reason || '-'}</td>
-                  <td className="py-1 text-muted-foreground">{e.by}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
-      )}
     </div>
+  );
+};
+
+// ====================================================================
+// Salary audit log (every employee): owed debts, joining-date changes
+// ====================================================================
+export const SalaryAuditLogSection = ({ entries }: { entries: SalaryAuditEntry[] }) => {
+  const sorted = [...entries].sort((a, b) => b.at.localeCompare(a.at));
+  return (
+    <details className="bg-card border border-border rounded-xl p-5 text-sm">
+      <summary className="cursor-pointer font-bold text-foreground">Salary audit log ({entries.length})</summary>
+      {sorted.length === 0 ? (
+        <p className="text-xs text-muted-foreground mt-3">Nothing recorded yet. Owed amounts, recoveries, write-offs and joining-date changes appear here.</p>
+      ) : (
+        <table className="w-full mt-3 text-xs">
+          <thead>
+            <tr className="text-left text-muted-foreground uppercase">
+              <th className="py-1 pr-2 font-semibold">When</th>
+              <th className="py-1 pr-2 font-semibold">Action</th>
+              <th className="py-1 pr-2 font-semibold text-right">Amount</th>
+              <th className="py-1 pr-2 font-semibold text-right">Balance</th>
+              <th className="py-1 pr-2 font-semibold">Reason</th>
+              <th className="py-1 font-semibold">By</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(e => {
+              const money = e.action !== 'joining_date_changed';
+              return (
+                <tr key={e.id} className="border-t border-border align-top">
+                  <td className="py-1.5 pr-2 whitespace-nowrap font-mono">{formatStamp(e.at)}</td>
+                  <td className="py-1.5 pr-2 font-semibold text-foreground whitespace-nowrap">{AUDIT_LABEL[e.action]}</td>
+                  <td className="py-1.5 pr-2 text-right">{money ? formatRs(e.amount) : '-'}</td>
+                  <td className="py-1.5 pr-2 text-right text-muted-foreground">{money ? formatRs(e.balanceAfter) : '-'}</td>
+                  <td className="py-1.5 pr-2 text-muted-foreground">{e.reason || '-'}</td>
+                  <td className="py-1.5 text-muted-foreground">{e.by}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </details>
   );
 };

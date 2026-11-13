@@ -240,6 +240,8 @@ export interface SalaryPayment {
   debtInLines?: Array<{ id: string; label: string; amount: number }>;
   /** Signed payable before paying out (negative = debt carried forward). */
   payableAmount?: number;
+  /** Transition cycle after a joining-date change (paid by days). */
+  isTransitionCycle?: boolean;
   attendanceDeduction?: number;
   earnedAmount?: number;
   advance_deducted: number;
@@ -270,7 +272,7 @@ export interface SalaryAuditEntry {
   at: string; // ISO timestamp
   by: string; // username or 'master'
   employeeId: string;
-  action: 'owed_debt_created' | 'owed_debt_recovered' | 'owed_debt_written_off';
+  action: 'owed_debt_created' | 'owed_debt_recovered' | 'owed_debt_written_off' | 'joining_date_changed';
   recordId: string; // SalaryAdvance id of the owed debt
   amount: number;
   balanceAfter: number;

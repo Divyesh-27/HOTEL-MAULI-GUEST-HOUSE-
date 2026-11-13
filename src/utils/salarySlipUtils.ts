@@ -4,7 +4,7 @@ import {
 } from '@/types';
 import {
   SalaryCycle, calculateCycleAttendance, calculateCycleFinancials,
-  formatDDMMYYYY, getDaysInMonth, diffDaysInclusive, PAY_BASIS_DAYS, formatShiftLabel
+  formatDDMMYYYY, getDaysInMonth, diffDaysInclusive, PAY_BASIS_DAYS, formatShiftLabel, cycleGrossSalary
 } from './salaryCycleUtils';
 
 export interface SalarySlipItem {
@@ -30,6 +30,8 @@ export interface SalarySlipData {
   isPaid: boolean;
   isReversed: boolean;
   statusText: string; // "PAID" | "DRAFT - NOT YET PAID" | "REVERSED"
+  /** First cycle after a joining-date change, paid by days. */
+  isTransition: boolean;
 
   // Employee Info (NO Aadhaar, NO phone, NO address)
   employeeName: string;
@@ -223,6 +225,7 @@ export function calculateSalarySlipData(params: {
   const isReversed = payment?.status === 'Reversed';
   const isPaid = !!payment && !isReversed;
   const statusText = isReversed ? 'REVERSED' : (isPaid ? 'PAID' : 'DRAFT - NOT YET PAID');
+  const isTransition = payment ? !!payment.isTransitionCycle : !!cycle?.isTransition;
   const slipNumber = payment?.slipNumber || (payment ? 'SLIP-PAID' : 'DRAFT');
 
   // Attendance & Deductions
@@ -269,14 +272,15 @@ export function calculateSalarySlipData(params: {
     presentDays = attSummary.presentDays;
     absentDays = attSummary.absentDays;
     halfDays = attSummary.halfDays;
-    notMarkedDays = attSummary.notMarkedDays;
+    notMarkedDays = 0; // unmarked past days count as Present
     draftDeductedDays = attSummary.deductedDays;
     deductedDates = attSummary.deductedDates.map(d => ({
       date: d.date,
       type: d.type,
       amount: Math.round(perDayAmount * d.weight * 100) / 100,
     }));
-    const preview = calculateCycleFinancials(salaryUsed, cycleDays, draftDeductedDays, 0, 0, 0, 0);
+    const preview = calculateCycleFinancials(salaryUsed, cycleDays, draftDeductedDays, 0, 0, 0, 0, cycleGrossSalary(salaryUsed, { cycleDays, isTransition }));
+    salaryUsed = preview.salaryUsed;
     attendanceDeduction = preview.deductionAmount;
     earnedAmount = preview.earnedAmount;
   }
@@ -456,7 +460,8 @@ export function calculateSalarySlipData(params: {
       advancesTotalAmount,
       debtInTotal,
       0, // borrows require explicit selection
-      adjustmentsTotal
+      adjustmentsTotal,
+      cycleGrossSalary(employee.monthlySalary, { cycleDays, isTransition })
     );
     totalAdvanceDeducted = fin.thisCycleAdvances;
     totalBorrowDeducted = 0;
@@ -508,6 +513,7 @@ export function calculateSalarySlipData(params: {
     isPaid,
     isReversed,
     statusText,
+    isTransition,
     employeeName: employee.name,
     roleName,
     shiftName,
@@ -843,7 +849,7 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
         </div>
         <div class="slip-meta-strip">
           <span><strong>Slip No:</strong> ${data.slipNumber}</span>
-          <span><strong>Cycle:</strong> ${data.monthFormatted} (${data.cycleDays} days)</span>
+          <span><strong>Cycle:</strong> ${data.monthFormatted} (${data.cycleDays} days)${data.isTransition ? ' &mdash; Transition cycle (joining date changed)' : ''}</span>
           <span><strong>Date Printed:</strong> ${data.printedDate}</span>
           <span><strong>Status:</strong> ${data.statusText}</span>
         </div>
@@ -865,12 +871,12 @@ export function generateSalarySlipHtml(data: SalarySlipData): string {
       <div class="attendance-strip">
         <div>
           <strong>Attendance (${data.cycleDays} Days in Cycle):</strong> 
-          Present: <strong>${data.presentDays}</strong> &nbsp;|&nbsp; 
-          Absent: <strong>${data.absentDays}</strong> &nbsp;|&nbsp;
+          Present${data.payBasisDays === 30 ? ' (incl. unmarked days)' : ''}: <strong>${data.presentDays}</strong> &nbsp;|&nbsp;
           Half Day: <strong>${data.halfDays}</strong> &nbsp;|&nbsp;
-          ${data.paidLeaveDays > 0 ? `Paid Leave: <strong>${data.paidLeaveDays}</strong> &nbsp;|&nbsp; ` : ''}
-          ${data.unpaidLeaveDays > 0 ? `Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong> &nbsp;|&nbsp; ` : ''}
-          Not Marked: <strong>${data.notMarkedDays}</strong> (paid in full)
+          Absent: <strong>${data.absentDays}</strong>
+          ${data.paidLeaveDays > 0 ? ` &nbsp;|&nbsp; Paid Leave: <strong>${data.paidLeaveDays}</strong>` : ''}
+          ${data.unpaidLeaveDays > 0 ? ` &nbsp;|&nbsp; Unpaid Leave: <strong>${data.unpaidLeaveDays}</strong>` : ''}
+          ${data.notMarkedDays > 0 ? ` &nbsp;|&nbsp; Not Marked: <strong>${data.notMarkedDays}</strong> (paid in full)` : ''}
         </div>
         ${data.deductedDates && data.deductedDates.length > 0 ? `
           <div class="deductions-list">

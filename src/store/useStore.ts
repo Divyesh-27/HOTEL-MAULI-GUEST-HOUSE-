@@ -15,7 +15,7 @@ import { generateUUID } from '@/lib/uuid';
 import type { RegistrationDraft } from '@/utils/registrationDraft';
 import { getRoomStatusOnDate, normalizeToDayStr, getCheckoutDayStr } from '@/utils/availabilityUtils';
 import { toLocalDateString } from '@/utils/dateUtils';
-import { generateEmployeeCycles, generateSlipNumber, formatDDMMYYYY, attendanceWeight, PAY_BASIS_DAYS, AttendanceMark } from '@/utils/salaryCycleUtils';
+import { generateEmployeeCycles, generateSlipNumber, formatDDMMYYYY, attendanceWeight, PAY_BASIS_DAYS, AttendanceMark, findRecordBeforeDate } from '@/utils/salaryCycleUtils';
 import {
   pushInvoiceSettingsToCloud,
   pushRoomToCloud,
@@ -213,6 +213,12 @@ interface StoreState {
   deleteShift: (id: string) => { success: boolean; error?: string };
   addEmployee: (employee: Omit<Employee, 'id' | 'created_at' | 'updated_at'>) => Employee;
   updateEmployee: (id: string, updates: Partial<Employee>) => void;
+  /**
+   * Change the joining date. With payouts: reason required, refused if attendance,
+   * advances or borrows would fall before it, and audit logged. Paid cycles keep
+   * their stored dates; the next cycle becomes a transition cycle.
+   */
+  changeJoiningDate: (id: string, newDate: string, reason: string) => { success: boolean; error?: string };
   softDeleteEmployee: (id: string) => void;
   /** status null = unmark (the day is no longer counted either way). */
   markAttendance: (employeeId: string, date: string, status: AttendanceMark | null) => void;
@@ -245,6 +251,7 @@ interface StoreState {
     debtInLines?: Array<{ id: string; label: string; amount: number }>;
     payableAmount?: number;
     cycleIndex?: number;
+    isTransitionCycle?: boolean;
     attendanceDeduction: number;
     earnedAmount: number;
     advanceDeducted: number;
@@ -281,6 +288,7 @@ interface StoreState {
     debtInLines?: Array<{ id: string; label: string; amount: number }>;
     payableAmount?: number;
     cycleIndex?: number;
+    isTransitionCycle?: boolean;
     attendanceDeduction: number;
     earnedAmount: number;
     advanceDeducted: number;
@@ -680,14 +688,14 @@ export const useStore = create<StoreState>()(
         const emp = state.employees.find((e) => e.id === id);
         if (!emp) return state;
 
-        // PRD Section 1: Joining date can't be edited after the first payout
+        // After a payout, the joining date only changes through changeJoiningDate
+        // (reason + validation + audit), never silently here.
         let safeUpdates = { ...updates };
         if (updates.joiningDate && updates.joiningDate !== emp.joiningDate) {
           const hasPaidSlip = (state.salaryPayments || []).some(
             (p) => p.employeeId === id && p.status === 'Paid' && !p.deleted_at
           );
           if (hasPaidSlip) {
-            console.warn('[useStore] Cannot edit joining date after first payout has been made.');
             safeUpdates.joiningDate = emp.joiningDate;
           }
         }
@@ -698,6 +706,44 @@ export const useStore = create<StoreState>()(
           ),
         };
       }),
+
+      changeJoiningDate: (id, newDate, reason) => {
+        const state = get();
+        const emp = state.employees.find((e) => e.id === id && !e.deleted_at);
+        if (!emp) return { success: false, error: 'Employee not found.' };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) return { success: false, error: 'Choose a valid joining date.' };
+        if (newDate === emp.joiningDate) return { success: true };
+        const now = new Date().toISOString();
+        const hasPaidSlip = (state.salaryPayments || []).some(
+          (p) => p.employeeId === id && p.status === 'Paid' && !p.deleted_at
+        );
+        if (!hasPaidSlip) {
+          // No payouts: behaves as before
+          set({ employees: state.employees.map((e) => (e.id === id ? { ...e, joiningDate: newDate, updated_at: now } : e)) });
+          return { success: true };
+        }
+        const trimmed = (reason || '').trim();
+        if (!trimmed) return { success: false, error: 'A reason is required to change the joining date after a payout.' };
+        const before = findRecordBeforeDate(id, newDate, state.attendance || [], state.salaryAdvances || [], state.borrows || []);
+        if (before) {
+          return { success: false, error: before.label + ' is before ' + formatDDMMYYYY(newDate) + '. Choose a joining date on or before ' + formatDDMMYYYY(before.date) + '.' };
+        }
+        set({
+          employees: state.employees.map((e) => (e.id === id ? { ...e, joiningDate: newDate, updated_at: now } : e)),
+          salaryAuditLog: [...(state.salaryAuditLog || []), {
+            id: generateUUID(),
+            at: now,
+            by: auditUser(state.currentUser),
+            employeeId: id,
+            action: 'joining_date_changed',
+            recordId: id,
+            amount: 0,
+            balanceAfter: 0,
+            reason: 'Joining date ' + formatDDMMYYYY(emp.joiningDate) + ' -> ' + formatDDMMYYYY(newDate) + ': ' + trimmed,
+          }],
+        });
+        return { success: true };
+      },
 
       softDeleteEmployee: (id) => set((state) => ({
         employees: state.employees.map((emp) =>
@@ -1088,6 +1134,7 @@ export const useStore = create<StoreState>()(
           status: 'Paid',
           isLegacy: false,
           isFinalSettlement: !!payout.isFinalSettlement,
+          isTransitionCycle: !!payout.isTransitionCycle,
           lastWorkingDate: payout.lastWorkingDate,
           created_at: now,
           updated_at: now,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, ChangeEvent } from 'react';
 import { 
   Users, Check, X, Calendar as CalendarIcon, ChevronLeft, ChevronRight, 
-  Lock, Unlock, DollarSign, Plus, Trash2, Edit2, 
+  Lock, Unlock, IndianRupee, Plus, Trash2, Edit2, 
   CheckCircle2, Clock, Search, ArrowRight, Printer, Download,
   AlertTriangle, RotateCcw, AlertCircle, FileText, Ban, UserCheck
 } from 'lucide-react';
@@ -19,10 +19,11 @@ import {
   SalaryCycle, generateEmployeeCycles, calculateCycleAttendance, 
   calculateCycleFinancials, formatDDMMYYYY, diffDaysInclusive,
   CycleAttendanceSummary, AttendanceMark, PAY_BASIS_DAYS, normalizeAttendanceStatus, formatShiftLabel, formatRs,
-  projectDuePayouts, calculateFinalSettlement
+  projectDuePayouts, calculateFinalSettlement, cycleGrossSalary, findRecordBeforeDate, describeJoiningDateChange
 } from '@/utils/salaryCycleUtils';
 import {
-  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard
+  CycleAttendanceGrid, AttendanceSummaryTiles, SalarySummaryCard, AdvancesBorrowsBox, ManageShiftsModal, OwedByEmployeeCard,
+  SalaryAuditLogSection
 } from './StaffPanels';
 
 const Staff = () => {
@@ -41,9 +42,9 @@ const Staff = () => {
     appRoles,
     addEmployee,
     updateEmployee,
+    changeJoiningDate,
     softDeleteEmployee,
     markAttendance,
-    markAllPresent,
     addShift,
     updateShift,
     deleteShift,
@@ -75,9 +76,9 @@ const Staff = () => {
     appRoles: state.appRoles,
     addEmployee: state.addEmployee,
     updateEmployee: state.updateEmployee,
+    changeJoiningDate: state.changeJoiningDate,
     softDeleteEmployee: state.softDeleteEmployee,
     markAttendance: state.markAttendance,
-    markAllPresent: state.markAllPresent,
     addShift: state.addShift,
     updateShift: state.updateShift,
     deleteShift: state.deleteShift,
@@ -280,15 +281,16 @@ const Staff = () => {
     for (const a of attendance) {
       if (a.date === todayStr && !a.deleted_at) byEmp.set(a.employeeId, a.status);
     }
-    let present = 0, halfDay = 0, absent = 0, notMarked = 0;
+    // No mark today = Present by default (only Absent / Half Day are marked explicitly)
+    let present = 0, halfDay = 0, absent = 0;
     for (const emp of activeEmployees) {
+      if (todayStr < emp.joiningDate) continue;
       const st = normalizeAttendanceStatus(byEmp.get(emp.id));
-      if (st === 'Present') present++;
-      else if (st === 'Half Day') halfDay++;
+      if (st === 'Half Day') halfDay++;
       else if (st === 'Absent') absent++;
-      else if (todayStr >= emp.joiningDate) notMarked++;
+      else present++;
     }
-    return { present, halfDay, absent, notMarked };
+    return { present, halfDay, absent };
   }, [activeEmployees, attendance, todayStr]);
 
   // "Payable now" and which employees have a Due cycle (one cycle pass per employee)
@@ -409,7 +411,8 @@ const Staff = () => {
       cycleAdvancesTotal,
       priorAdvancesTotal,
       0, // borrow recovery is chosen in the payout window
-      openAdjustmentsTotal
+      openAdjustmentsTotal,
+      cycleGrossSalary(selectedEmployee.monthlySalary, selectedCycle)
     );
     return {
       isPaid: false,
@@ -437,20 +440,6 @@ const Staff = () => {
     }
   };
 
-  // All Present: only employees still unmarked today, after confirming the count
-  const handleAllPresent = () => {
-    const count = activeEmployees.filter(e =>
-      todayStr >= e.joiningDate && !attendance.some(a => a.employeeId === e.id && a.date === todayStr && !a.deleted_at)
-    ).length;
-    if (count === 0) {
-      toast.info(`Everyone is already marked for ${formatDDMMYYYY(todayStr)}.`);
-      return;
-    }
-    if (!window.confirm(`Mark ${count} unmarked staff member${count === 1 ? '' : 's'} as Present for ${formatDDMMYYYY(todayStr)}?`)) return;
-    const marked = markAllPresent(todayStr);
-    toast.success(`Marked ${marked} as Present for ${formatDDMMYYYY(todayStr)}`);
-  };
-
   // Role & Shift display helpers
   const getRoleName = (roleId: string) => {
     return staffRoles.find(r => r.id === roleId)?.name || 'Staff';
@@ -475,10 +464,10 @@ const Staff = () => {
     <div className="animate-fade-in space-y-6">
       
       {/* ============================================================== */}
-      {/* 1. TODAY'S STATS + ALL PRESENT                                 */}
+      {/* 1. TODAY'S STATS                                               */}
       {/* ============================================================== */}
-      <div className="flex flex-col lg:flex-row gap-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 flex-1">
+      <div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="stat-card">
             <div className="flex justify-between items-center">
               <div>
@@ -493,10 +482,7 @@ const Staff = () => {
             <div className="flex justify-between items-center">
               <div>
                 <p className="text-xs text-muted-foreground uppercase font-bold">Present Today</p>
-                <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-                  {todayCounts.present}
-                  {todayCounts.halfDay > 0 && <span className="text-sm font-semibold text-amber-600 dark:text-amber-400 ml-2">+{todayCounts.halfDay} half</span>}
-                </p>
+                <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">{todayCounts.present}</p>
               </div>
               <Check className="w-8 h-8 opacity-30 text-emerald-600 dark:text-emerald-400" />
             </div>
@@ -515,8 +501,8 @@ const Staff = () => {
           <div className="stat-card hover:border-amber-500/50">
             <div className="flex justify-between items-center">
               <div>
-                <p className="text-xs text-muted-foreground uppercase font-bold">Not Marked</p>
-                <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">{todayCounts.notMarked}</p>
+                <p className="text-xs text-muted-foreground uppercase font-bold">Half Day Today</p>
+                <p className="text-3xl font-bold text-amber-600 dark:text-amber-400">{todayCounts.halfDay}</p>
               </div>
               <Clock className="w-8 h-8 opacity-30 text-amber-600 dark:text-amber-400" />
             </div>
@@ -528,19 +514,10 @@ const Staff = () => {
                 <p className="text-xs text-muted-foreground uppercase font-bold">Payable Now</p>
                 <p className="text-3xl font-bold text-foreground">₹{totalPayableNow.toLocaleString('en-IN')}</p>
               </div>
-              <DollarSign className="w-8 h-8 opacity-30 text-foreground" />
+              <IndianRupee className="w-8 h-8 opacity-30 text-foreground" />
             </div>
           </div>
         </div>
-
-        <button
-          onClick={handleAllPresent}
-          className="flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95"
-          title="Mark every staff member still unmarked today as Present"
-        >
-          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-          <span>All Present</span>
-        </button>
       </div>
 
       {/* ============================================================== */}
@@ -759,7 +736,7 @@ const Staff = () => {
                         className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-sm"
                         title="Execute salary payout for this cycle"
                       >
-                        <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                        <IndianRupee className="w-3.5 h-3.5 text-emerald-400" />
                         <span>Payout Salary</span>
                       </button>
                     )}
@@ -779,7 +756,7 @@ const Staff = () => {
               </div>
 
               {selectedOwedDebts.length > 0 && (
-                <OwedByEmployeeCard debts={selectedOwedDebts} auditLog={selectedAuditLog} onResolve={resolveOwedDebt} />
+                <OwedByEmployeeCard debts={selectedOwedDebts} onResolve={resolveOwedDebt} />
               )}
 
               {/* Attendance for the selected salary cycle */}
@@ -807,7 +784,7 @@ const Staff = () => {
                       >
                         {employeeCycles.map((c, idx) => (
                           <option key={c.id} value={idx}>
-                            Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status})
+                            Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status}){c.isTransition ? ' · Transition' : ''}
                           </option>
                         ))}
                       </select>
@@ -839,6 +816,11 @@ const Staff = () => {
                         <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           <span>Due for Payout</span>
+                        </span>
+                      )}
+                      {selectedCycle.isTransition && (
+                        <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30" title="First cycle after a joining-date change: paid by days">
+                          Transition cycle (joining date changed)
                         </span>
                       )}
                       {selectedCycle.status === 'Running' && (
@@ -882,7 +864,6 @@ const Staff = () => {
                       present={cycleAttendance.presentDays}
                       halfDays={cycleAttendance.halfDays}
                       absent={cycleAttendance.absentDays}
-                      notMarked={cycleAttendance.notMarkedDays}
                     />
                   </div>
                   <div className="xl:col-span-2">
@@ -917,6 +898,9 @@ const Staff = () => {
                   deleteBorrow={deleteBorrow}
                 />
               )}
+
+              {/* Salary audit log: every employee */}
+              <SalaryAuditLogSection entries={selectedAuditLog} />
             </>
           ) : (
             <div className="bg-card text-card-foreground rounded-xl p-12 shadow-sm border border-border text-center space-y-3">
@@ -1029,9 +1013,19 @@ const Staff = () => {
             setShowAddEditModal(false);
             setEditingEmployee(null);
           }}
-          onSave={async (empData, sensitiveData) => {
+          onSave={async (empData, sensitiveData, joiningChange) => {
             let targetId = editingEmployee ? editingEmployee.id : '';
             if (editingEmployee) {
+              if (joiningChange) {
+                const res = changeJoiningDate(editingEmployee.id, joiningChange.newDate, joiningChange.reason);
+                if (!res.success) {
+                  toast.error(res.error || 'Could not change the joining date');
+                  return;
+                }
+                toast.success(`Joining date changed to ${formatDDMMYYYY(joiningChange.newDate)}`);
+              } else if (empData.joiningDate !== editingEmployee.joiningDate) {
+                changeJoiningDate(editingEmployee.id, empData.joiningDate, '');
+              }
               updateEmployee(editingEmployee.id, empData);
               toast.success('Staff record updated');
             } else {
@@ -1237,7 +1231,8 @@ const CyclePayoutModal = ({
     advancesThisCycleTotal,
     debtInTotal,
     requestedBorrow,
-    adjustmentsTotal
+    adjustmentsTotal,
+    cycleGrossSalary(monthlySalary, cycle)
   );
   const totalBorrowSelected = fin.borrowRecoveryDeducted;
   const netPayable = fin.netPayable;
@@ -1260,12 +1255,6 @@ const CyclePayoutModal = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (cycleAttendance.notMarkedDays > 0) {
-      const confirmed = window.confirm(
-        `There are ${cycleAttendance.notMarkedDays} unmarked days in this cycle. Unmarked days are paid in full. Do you want to proceed?`
-      );
-      if (!confirmed) return;
-    }
     if (fin.carriedForwardAdvanceOut > 0) {
       const confirmed = window.confirm(
         `Payable is ${formatRs(fin.payable)}. ₹0 will be paid and ${formatRs(fin.carriedForwardAdvanceOut)} will be carried as Debt to the next cycle. Continue?`
@@ -1290,7 +1279,8 @@ const CyclePayoutModal = ({
       cycleStart: cycle.startDate,
       cycleEnd: cycle.endDate,
       cycleDays: cycle.cycleDays,
-      salaryUsed: monthlySalary,
+      salaryUsed: fin.salaryUsed,
+      isTransitionCycle: !!cycle.isTransition,
       perDay: fin.perDayAmount,
       payBasisDays: fin.payBasisDays,
       gross: monthlySalary,
@@ -1299,7 +1289,7 @@ const CyclePayoutModal = ({
       halfDays: cycleAttendance.halfDays,
       paidLeaveDays: 0, // legacy leave is counted as Present / Absent
       unpaidLeaveDays: 0,
-      notMarkedDays: cycleAttendance.notMarkedDays,
+      notMarkedDays: 0, // unmarked days count as Present
       deductedDates: cycleAttendance.deductedDates.map(d => ({
         date: d.date,
         type: d.type,
@@ -1334,20 +1324,17 @@ const CyclePayoutModal = ({
             <p className="text-xs text-muted-foreground">
               Cycle #{cycle.cycleIndex + 1}: {formatDDMMYYYY(cycle.startDate)} to {formatDDMMYYYY(cycle.endDate)} ({cycle.cycleDays} days)
             </p>
+            {cycle.isTransition && (
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                Transition cycle (joining date changed): paid for {cycle.cycleDays} days = {formatRs(fin.salaryUsed)}
+              </p>
+            )}
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {cycleAttendance.notMarkedDays > 0 && (
-          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
-            <Clock className="w-4 h-4 shrink-0" />
-            <span>
-              <strong>{cycleAttendance.notMarkedDays} days</strong> are not marked in this cycle. Unmarked days are paid in full.
-            </span>
-          </div>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Earnings & attendance */}
@@ -1357,7 +1344,7 @@ const CyclePayoutModal = ({
               <span>{formatRs(monthlySalary)} ({formatRs(fin.perDayAmount)}/day, 30-day month)</span>
             </div>
 
-            <div className="grid grid-cols-4 gap-1 text-center py-2 border-y border-border/60">
+            <div className="grid grid-cols-3 gap-1 text-center py-2 border-y border-border/60">
               <div>
                 <p className="text-muted-foreground text-[10px]">Present</p>
                 <p className="font-bold text-emerald-600">{cycleAttendance.presentDays}</p>
@@ -1369,10 +1356,6 @@ const CyclePayoutModal = ({
               <div>
                 <p className="text-muted-foreground text-[10px]">Half Day</p>
                 <p className="font-bold text-amber-600">{cycleAttendance.halfDays}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Not Marked</p>
-                <p className="font-bold text-foreground">{cycleAttendance.notMarkedDays}</p>
               </div>
             </div>
 
@@ -1510,7 +1493,7 @@ const CyclePayoutModal = ({
                 <p className="text-xs opacity-90 mt-0.5">₹0 paid · {formatRs(fin.carriedForwardAdvanceOut)} carried as Debt to the next cycle</p>
               )}
             </div>
-            <DollarSign className="w-8 h-8 opacity-40" />
+            <IndianRupee className="w-8 h-8 opacity-40" />
           </div>
 
           {/* Payment metadata */}
@@ -1778,7 +1761,7 @@ const FinalSettlementModal = ({
       paidLeaveDays: 0, // legacy leave is counted as Present / Absent
       unpaidLeaveDays: 0,
       payBasisDays: PAY_BASIS_DAYS,
-      notMarkedDays: cycleAttendance.notMarkedDays,
+      notMarkedDays: 0, // unmarked days count as Present
       deductedDates: cycleAttendance.deductedDates.map(d => ({ date: d.date, type: d.type, amount: Math.round(perDay * d.weight * 100) / 100 })),
       attendanceDeduction: Math.round(perDay * 100 * cycleAttendance.deductedDays) / 100,
       earnedAmount,
@@ -1922,7 +1905,9 @@ interface AddEditEmployeeModalProps {
   onClose: () => void;
   onSave: (
     empData: Omit<Employee, 'id' | 'created_at' | 'updated_at'>,
-    sensitiveData?: { aadhaarNumber?: string; aadhaarImage?: string; photo?: string }
+    sensitiveData?: { aadhaarNumber?: string; aadhaarImage?: string; photo?: string },
+    /** Set when the joining date changes after a payout (reason required, audit logged). */
+    joiningChange?: { newDate: string; reason: string }
   ) => void;
 }
 
@@ -1946,11 +1931,14 @@ const AddEditEmployeeModal = ({
   const [phone, setPhone] = useState(employee?.phone || '');
   const [address, setAddress] = useState(employee?.address || '');
   
-  // PRD Section 1: Joining date cannot be edited after first payout
-  const isJoiningDateLocked = useMemo(() => {
+  // Joining date is editable any time. After a payout, a change needs a reason
+  // and is checked and audit logged (paid cycles keep their stored dates).
+  const hasPayouts = useMemo(() => {
     if (!employee) return false;
     return (salaryPayments || []).some(p => p.employeeId === employee.id && p.status === 'Paid' && !p.deleted_at);
   }, [employee, salaryPayments]);
+  const [joiningReason, setJoiningReason] = useState('');
+  const joiningChangeNeedsReason = !!employee && hasPayouts && joiningDate !== employee.joiningDate;
 
   // Sensitive Vault Fields
   const [fullAadhaar, setFullAadhaar] = useState<string>(decryptedVaultData?.aadhaarNumber || '');
@@ -1980,6 +1968,30 @@ const AddEditEmployeeModal = ({
     e.preventDefault();
     if (!name.trim()) return;
 
+    let joiningChange: { newDate: string; reason: string } | undefined;
+    if (employee && joiningChangeNeedsReason) {
+      if (!joiningReason.trim()) {
+        toast.error('Enter a reason for changing the joining date.');
+        return;
+      }
+      const st = useStore.getState();
+      const before = findRecordBeforeDate(employee.id, joiningDate, st.attendance || [], st.salaryAdvances || [], st.borrows || []);
+      if (before) {
+        toast.error(`${before.label} is before ${formatDDMMYYYY(joiningDate)}. Choose a joining date on or before ${formatDDMMYYYY(before.date)}.`);
+        return;
+      }
+      const openAdj = (st.salaryAdjustments || [])
+        .filter(x => x.employeeId === employee.id && x.status === 'Open' && !x.deleted_at)
+        .reduce((sum, x) => sum + Number(x.amount || 0), 0);
+      const effect = describeJoiningDateChange(
+        employee, joiningDate, salaryPayments, st.attendance || [], st.salaryAdvances || [], openAdj
+      )?.text || '';
+      if (!window.confirm(
+        `Change joining date from ${formatDDMMYYYY(employee.joiningDate)} to ${formatDDMMYYYY(joiningDate)}?\n\n${effect}\n\nReason: ${joiningReason.trim()}\nThis is recorded in the salary audit log.`
+      )) return;
+      joiningChange = { newDate: joiningDate, reason: joiningReason.trim() };
+    }
+
     const cleanAadhaar = fullAadhaar.replace(/\s+/g, '');
     const aadhaarLast4 = cleanAadhaar.length >= 4 ? cleanAadhaar.slice(-4) : (employee?.aadhaarLast4 || undefined);
 
@@ -1988,7 +2000,7 @@ const AddEditEmployeeModal = ({
       roleId,
       shiftId,
       monthlySalary: Number(salary) || 0,
-      joiningDate: isJoiningDateLocked && employee ? employee.joiningDate : joiningDate,
+      joiningDate,
       status: 'active',
       phone: phone.trim() || undefined,
       address: address.trim() || undefined,
@@ -2001,7 +2013,7 @@ const AddEditEmployeeModal = ({
       photo: photoBase64 || undefined
     };
 
-    onSave(empData, sensitiveData);
+    onSave(empData, sensitiveData, joiningChange);
   };
 
   return (
@@ -2077,17 +2089,24 @@ const AddEditEmployeeModal = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-foreground mb-1">
-                Joining Date {isJoiningDateLocked && <span className="text-amber-600 font-normal">(Locked after payout)</span>}
+                Joining Date {hasPayouts && <span className="text-muted-foreground font-normal">(change after payout needs a reason)</span>}
               </label>
               <input
                 type="date"
-                disabled={isJoiningDateLocked}
                 value={joiningDate}
                 onChange={e => setJoiningDate(e.target.value)}
-                className={`w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent ${
-                  isJoiningDateLocked ? 'opacity-60 cursor-not-allowed bg-secondary/50' : ''
-                }`}
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
               />
+              {joiningChangeNeedsReason && (
+                <input
+                  type="text"
+                  required
+                  placeholder="Reason for changing the joining date *"
+                  value={joiningReason}
+                  onChange={e => setJoiningReason(e.target.value)}
+                  className="w-full mt-2 px-3 py-2 bg-background border border-amber-500/50 rounded-lg text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              )}
             </div>
 
             <div>
@@ -2356,7 +2375,7 @@ const SalarySlipModal = ({
             >
               {cycles.map((c, idx) => (
                 <option key={c.id} value={c.id}>
-                  Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status})
+                  Cycle #{c.cycleIndex + 1}: {formatDDMMYYYY(c.startDate)} to {formatDDMMYYYY(c.endDate)} ({c.status}){c.isTransition ? ' · Transition' : ''}
                 </option>
               ))}
             </select>
