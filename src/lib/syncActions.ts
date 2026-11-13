@@ -7,6 +7,7 @@
  */
 import { enqueueSync } from '@/lib/syncEngine';
 import { uploadMediaToCloud } from '@/lib/supabaseBridge';
+import { useStore } from '@/store/useStore';
 import { Booking, HistoryRecord, InvoiceSettings } from '@/types';
 
 /**
@@ -48,25 +49,52 @@ export async function uploadBase64ToStorage(bucket: string, path: string, base64
 
 export async function pushBookingToCloud(booking: Booking) {
   try {
+    const snap = useStore.getState().bookingRateSnapshots?.[booking.id];
     const record = {
-      ...booking,
-      room_nos: booking.roomNos,
+      id: booking.id,
+      status: booking.isReservation ? 'RESERVED' : 'CHECKED_IN',
+      bill_no: booking.billNo,
+      bill_date: booking.billDate,
+      guest_name: booking.guestName,
+      mobile: booking.mobile,
+      address: booking.address,
+      persons: booking.persons,
+      other_persons: booking.otherPersons || null,
+      age: booking.age,
+      occupation: booking.occupation || null,
+      identity_proof_type: booking.identityProofType || null,
+      coming_from: booking.coming || null,
+      going_to: booking.going || null,
+      car_no: booking.carNo || null,
+      car_model: booking.carModel || null,
       check_in: booking.checkIn,
       check_out: booking.checkoutDate || null,
-      status: booking.isReservation ? 'RESERVED' : 'CHECKED_IN',
+      days: booking.days,
+      room_nos: booking.roomNos,
+      room_rates: snap?.rates || null,
+      rate_mode: snap?.modeId || null,
       advance_total: booking.advance || 0,
       advance_payments: booking.advancePayments || [],
       pay_mode: booking.payMode || 'Cash',
-      identity_proof: booking.identityProof || null,
+      extras: booking.extras || [],
+      discount: booking.discount || 0,
+      discount_note: booking.discountNote || null,
+      discount_reason: booking.discountReason || null,
+      show_discount_on_invoice: booking.showDiscountOnInvoice ?? null,
+      enable_gst_invoice: booking.enableGstInvoice ?? null,
+      customer_gstin: booking.customerGstin || null,
+      gst_rate: booking.gst_rate ?? null,
+      cgst_amount: booking.cgst_amount ?? null,
+      sgst_amount: booking.sgst_amount ?? null,
+      total_gst: booking.total_gst ?? null,
+      grand_total_with_gst: booking.grand_total_with_gst ?? null,
       identity_proof_url: booking.identityProofUrl || null,
-      digital_signature: booking.digitalSignature || null,
       digital_signature_url: booking.digitalSignatureUrl || null,
       updated_at: new Date().toISOString(),
       version: (booking.version || 0) + 1,
       source: 'desktop',
     };
 
-    // Enqueue non-blocking
     enqueueSync('bookings', booking.id, 'UPSERT', record);
   } catch (err) {
     console.error('[SyncActions] pushBookingToCloud error:', err);
@@ -83,20 +111,48 @@ export async function deleteBookingFromCloud(localId: string) {
 
 export async function pushHistoryToCloud(record: HistoryRecord) {
   try {
+    const snap = useStore.getState().bookingRateSnapshots?.[record.id];
     const payload = {
-      ...record,
-      room_nos: record.roomNos,
+      id: record.id,
+      status: 'COMPLETED',
+      bill_no: record.billNo,
+      bill_date: record.billDate,
+      guest_name: record.guestName,
+      mobile: record.mobile,
+      address: record.address,
+      persons: record.persons,
+      other_persons: record.otherPersons || null,
+      age: record.age,
+      occupation: record.occupation || null,
+      identity_proof_type: record.identityProofType || null,
+      coming_from: record.coming || null,
+      going_to: record.going || null,
+      car_no: record.carNo || null,
+      car_model: record.carModel || null,
       check_in: record.checkIn,
       check_out: record.checkoutDate,
-      status: 'COMPLETED',
-      final_amount: record.finalAmount || 0,
-      total_paid: record.totalPaid || 0,
+      days: record.days,
+      room_nos: record.roomNos,
+      room_rates: snap?.rates || null,
+      rate_mode: snap?.modeId || null,
       advance_total: record.advance || 0,
       advance_payments: record.advancePayments || [],
       pay_mode: record.payMode || 'Cash',
-      identity_proof: record.identityProof || null,
+      extras: record.extras || [],
+      discount: record.discount || 0,
+      discount_note: record.discountNote || null,
+      discount_reason: record.discountReason || null,
+      show_discount_on_invoice: record.showDiscountOnInvoice ?? null,
+      enable_gst_invoice: record.enableGstInvoice ?? null,
+      customer_gstin: record.customerGstin || null,
+      gst_rate: record.gst_rate ?? null,
+      cgst_amount: record.cgst_amount ?? null,
+      sgst_amount: record.sgst_amount ?? null,
+      total_gst: record.total_gst ?? null,
+      grand_total_with_gst: record.grand_total_with_gst ?? null,
+      final_amount: record.finalAmount || 0,
+      total_paid: record.totalPaid || 0,
       identity_proof_url: record.identityProofUrl || null,
-      digital_signature: record.digitalSignature || null,
       digital_signature_url: record.digitalSignatureUrl || null,
       updated_at: new Date().toISOString(),
       version: (record.version || 0) + 1,
